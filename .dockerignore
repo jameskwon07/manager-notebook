@@ -1,0 +1,39 @@
+# 빌드에 필요 없는 것과, 실수로 들어가면 안 되는 것을 뺍니다.
+# (이미지는 공개 레지스트리에 올라갑니다.)
+
+# 저장소·도구
+.git
+.github
+.gitignore
+.vscode
+.idea
+**/.DS_Store
+scripts
+
+# 실제 설정 파일(사내 주소·비밀번호·토큰이 들어갈 수 있음). 예시 파일만 남깁니다.
+*.env
+!notebook.env.example
+.env*
+*.pem
+*.crt
+*.key
+
+# 로컬 데이터·백업·빌드 결과
+data
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.tgz
+*.tar
+*.tar.gz
+dist
+bin
+out
+screenshots
+
+# 테스트 코드는 이미지 빌드에 쓰지 않습니다.
+**/*_test.go
+**/testdata
+web/test
+node_modules

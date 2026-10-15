@@ -1,0 +1,15 @@
+# 고정해 둔 digest·SHA 를 새 버전으로 올리자는 제안(PR)만 만듭니다. 자동으로 합치지 않습니다.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly

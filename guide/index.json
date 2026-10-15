@@ -1,0 +1,32 @@
+[
+ {
+  "slug": "guide",
+  "title": "실행 가이드",
+  "order": 0,
+  "file": "00-guide.md"
+ },
+ {
+  "slug": "kickoff",
+  "title": "시작 준비",
+  "order": 1,
+  "file": "01-kickoff.md"
+ },
+ {
+  "slug": "settings",
+  "title": "끄기·설정",
+  "order": 2,
+  "file": "02-settings.md"
+ },
+ {
+  "slug": "charter",
+  "title": "팀 약속(헌장)",
+  "order": 3,
+  "file": "03-charter.md"
+ },
+ {
+  "slug": "templates",
+  "title": "틀",
+  "order": 4,
+  "file": "04-templates.md"
+ }
+]

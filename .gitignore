@@ -1,0 +1,13 @@
+# 실행 데이터와 비밀값은 저장소에 넣지 않습니다.
+*.db
+*.db-*
+data/
+*.env
+!notebook.env.example
+.env*
+*.pem
+*.crt
+*.key
+.DS_Store
+/manager-notebook
+dist/

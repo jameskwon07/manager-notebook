@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>관리 수첩</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <p class="eyebrow" id="wk-eyebrow">관리 수첩</p>
+    <h1 id="app-title">관리 수첩</h1>
+    <div class="week" id="wk-line"></div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="수첩 탭">
+    <button role="tab" id="t-write" data-tab="write" aria-controls="p-write" aria-selected="true">적기</button>
+    <button role="tab" id="t-block" data-tab="block" aria-controls="p-block" aria-selected="false">막힘<span class="cnt" id="cnt-block"></span></button>
+    <button role="tab" id="t-friday" data-tab="friday" aria-controls="p-friday" aria-selected="false">금요일</button>
+    <button role="tab" id="t-say" data-tab="say" aria-controls="p-say" aria-selected="false">할 말</button>
+    <button role="tab" id="t-guide" data-tab="guide" aria-controls="p-guide" aria-selected="false">가이드</button>
+    <button role="tab" id="t-set" data-tab="set" aria-controls="p-set" aria-selected="false">설정</button>
+  </nav>
+
+  <div class="note store" id="store-note" role="status" hidden></div>
+
+  <!-- 적기 -->
+  <section class="panel" id="p-write" role="tabpanel" aria-labelledby="t-write">
+    <div class="card" id="onboard" hidden>
+      <h3>처음 쓸 때</h3>
+      <ol class="olist" id="onboard-list"></ol>
+      <div class="row end"><button class="btn quiet" id="onboard-close" type="button">알겠어요</button></div>
+    </div>
+    <div class="card">
+      <label class="label" for="cap-text">지금 떠오른 것 한 줄</label>
+      <textarea id="cap-text" rows="3" placeholder="예: 결제 모듈 이관이 이번 사이클 안에 끝날까?"></textarea>
+      <div class="row">
+        <button class="btn primary" id="cap-q" type="button">물음 메모로 적기</button>
+        <button class="btn" id="cap-l" type="button">나중에 보낼 것</button>
+        <span class="ex">Ctrl+Enter는 물음 메모로 적습니다.</span>
+      </div>
+      <p class="ex" id="cap-hint-q"></p>
+      <p class="ex" id="cap-hint-l"></p>
+    </div>
+    <div class="panel">
+      <h2>이번 주 적은 것</h2>
+      <ul class="list" id="note-list"></ul>
+      <div id="note-ex"></div>
+    </div>
+  </section>
+
+  <!-- 막힘 -->
+  <section class="panel" id="p-block" role="tabpanel" aria-labelledby="t-block" hidden>
+    <p class="lead pre" id="blk-intro"></p>
+    <div class="card">
+      <div class="row">
+        <div class="seg" role="group" aria-label="종류">
+          <button type="button" id="blk-kind-b" aria-pressed="true">막힘 · 48시간</button>
+          <button type="button" id="blk-kind-c" aria-pressed="false">헷갈림 · 24시간</button>
+        </div>
+      </div>
+      <label class="label" for="blk-text">Synology Chat에서 받은 내용 붙여 넣기</label>
+      <textarea id="blk-text" rows="3" placeholder="예: 스테이징 DB 권한이 없어 마이그레이션 테스트를 못 하고 있어요."></textarea>
+      <div class="row">
+        <label class="label" for="blk-when">받은 시각</label>
+        <input type="datetime-local" id="blk-when" class="when">
+        <button class="btn primary" id="blk-add" type="button">시계 시작</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>열린 것</h2>
+      <ul class="list" id="blk-open"></ul>
+    </div>
+    <details class="sc" id="blk-rules-box">
+      <summary><span>시계 규칙과 부재 시 넘기기</span></summary>
+      <div class="body"><ul class="olist tight" id="blk-rules"></ul><p class="label">부재 시 당번에게</p><div class="say" id="blk-absence"></div></div>
+    </details>
+    <div class="panel">
+      <h2>이번 사이클에 닫은 것</h2>
+      <ul class="list" id="blk-closed"></ul>
+    </div>
+  </section>
+
+  <!-- 금요일 -->
+  <section class="panel" id="p-friday" role="tabpanel" aria-labelledby="t-friday" hidden>
+    <p class="lead">금요일 14시, 산출물을 읽고 이번 주를 정리합니다. 상태는 묻지 않고 산출물로 봅니다. 초안은 복사용이고 어디에도 자동으로 보내지 않습니다.</p>
+    <div class="note" id="fri-marker" hidden></div>
+    <div class="card">
+      <h3>1. 산출물 읽기</h3>
+      <div class="checks" id="fri-checks"></div>
+    </div>
+
+    <div class="card">
+      <h3>2. 이번 주 정리</h3>
+      <p class="ex">칸마다 한 줄에 하나씩 적습니다. 사람 이름은 쓰지 않습니다.</p>
+      <details class="sc helper" id="fri-helper">
+        <summary><span>붙여 넣기 도우미</span><span class="when">Jira·Confluence에서 복사한 글</span></summary>
+        <div class="body">
+          <p class="ex" id="fri-helper-hint"></p>
+          <details class="howto"><summary>복사하는 법</summary><p class="ex pre" id="fri-paste-hint"></p></details>
+          <textarea id="fri-paste" rows="6" aria-label="복사한 글 붙여 넣기" placeholder="예: [결제 이관] 롤백 절차 문서화 끝남&#10;[검색 개선] 범위 줄이기 결정 필요"></textarea>
+          <div class="row">
+            <button class="btn" id="fri-split" type="button">줄 나누기</button>
+            <button class="btn quiet" id="fri-paste-clear" type="button">비우기</button>
+          </div>
+          <p class="ex" id="fri-split-status" role="status"></p>
+          <ul class="list plines" id="fri-lines"></ul>
+        </div>
+      </details>
+
+      <div class="fields">
+        <div class="field">
+          <label class="label" for="ff-done" id="fl-done">끝난 것·바뀐 결정</label>
+          <textarea id="ff-done" rows="4"></textarea>
+          <p class="ex" id="fx-done"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="ff-risks" id="fl-risks">위험(3개까지)</label>
+          <textarea id="ff-risks" rows="4"></textarea>
+          <p class="ex" id="fx-risks"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="ff-decisions" id="fl-decisions">결정이 필요한 것</label>
+          <textarea id="ff-decisions" rows="4"></textarea>
+          <p class="ex" id="fx-decisions"></p>
+          <div class="suggest" id="fri-suggest" hidden></div>
+        </div>
+        <div class="field">
+          <label class="label" for="ff-scope" id="fl-scope">바뀐 범위</label>
+          <textarea id="ff-scope" rows="4"></textarea>
+          <p class="ex" id="fx-scope"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="ff-remaining" id="fl-remaining">이번 사이클에 남은 범위</label>
+          <textarea id="ff-remaining" rows="4"></textarea>
+          <p class="ex" id="fx-remaining"></p>
+        </div>
+        <div class="field">
+          <p class="label">이번 주 물음 메모</p>
+          <ul class="mini" id="fri-qs"></ul>
+          <label class="label" for="ff-gap" id="fl-gap">물음 메모에서 가장 자주 빈 칸</label>
+          <input type="text" id="ff-gap" placeholder="예: 디자인 확정 여부">
+        </div>
+      </div>
+      <div class="row end"><button class="btn quiet" id="fri-keep" type="button">칸만 저장</button></div>
+    </div>
+
+    <div class="card">
+      <h3>3. 내가 지킨 것</h3>
+      <div class="self">
+        <div><label class="label" for="fri-asked">이번 주 상태를 따로 물은 횟수</label><input type="number" id="fri-asked" min="0" max="50" placeholder="비워도 됩니다" inputmode="numeric"></div>
+        <div><label class="label" for="fri-quiet">조용한 시간(화~목)을 지킨 날</label><select id="fri-quiet"><option value="">입력 안 함</option><option value="3">3일</option><option value="2">2일</option><option value="1">1일</option><option value="0">0일</option></select></div>
+      </div>
+      <p class="kept" id="fri-kept"></p>
+      <p class="ex" id="fri-kept-hint"></p>
+    </div>
+
+    <div class="card">
+      <h3>4. 초안 만들기</h3>
+      <p class="ex" id="fri-noai"></p>
+      <div class="row">
+        <button class="btn primary" id="fri-gen" type="button">틀로 초안 만들기</button>
+        <button class="btn" id="fri-ai" type="button" data-ai="1" hidden>사내 AI로 다듬기</button>
+        <button class="btn quiet" id="fri-stop" type="button" hidden>멈추기</button>
+      </div>
+      <p class="ex" id="fri-status" role="status"></p>
+    </div>
+
+    <div id="fri-out" class="panel" hidden>
+      <p class="note" id="out-polished" hidden>사내 AI가 다듬은 초안입니다. 칸에 없던 내용이 들어가지 않았는지 꼭 읽어 보세요.</p>
+      <div class="outs">
+        <div class="card out"><div class="row"><h3 class="grow">팀에 공유할 요약</h3><button class="btn copy" data-copy="team" type="button">복사</button></div><ol id="out-team"></ol></div>
+        <div class="card out"><div class="row"><h3 class="grow">상사에게 5줄</h3><button class="btn copy" data-copy="boss5" type="button">복사</button></div><ol id="out-boss5"></ol></div>
+      </div>
+      <div class="card out">
+        <div class="row"><h3 class="grow">회사 주간보고 양식</h3><button class="btn copy" data-copy="company" type="button">복사</button></div>
+        <textarea id="out-company" class="mono" aria-label="회사 주간보고 양식 초안" rows="10"></textarea>
+        <ul class="srcmap" id="out-company-src" aria-label="양식 칸별 출처" hidden></ul>
+      </div>
+      <div class="card out" id="out-gaps-box"><h3>입력 없음(빈칸)</h3><ul id="out-gaps"></ul><p class="ex">빈칸은 사람이 아니라 산출물 체계의 빈칸입니다. 가장 자주 비는 칸 하나를 다음 주에 고칩니다.</p></div>
+      <div class="note" id="out-notes-box" hidden><p class="label">알림</p><ul class="olist tight" id="out-notes"></ul></div>
+      <p class="ex" id="copy-gate">1번의 세 항목에 읽었다·아직 없음을 표시하고, 하나 이상 읽으면 복사할 수 있습니다.</p>
+      <div class="row end"><button class="btn primary" id="fri-save" type="button">이번 주 기록으로 저장</button></div>
+    </div>
+    <div class="panel">
+      <h2>지난 금요일</h2>
+      <ul class="list" id="fri-history"></ul>
+    </div>
+  </section>
+
+  <!-- 할 말 -->
+  <section class="panel" id="p-say" role="tabpanel" aria-labelledby="t-say" hidden>
+    <div class="card" id="selfcheck"></div>
+    <div class="panel"><h2>상황별 문장</h2><div class="list" id="scripts"></div></div>
+    <div class="card" id="oneonone"></div>
+  </section>
+
+  <!-- 가이드 -->
+  <section class="panel" id="p-guide" role="tabpanel" aria-labelledby="t-guide" hidden>
+    <div class="guide">
+      <nav class="guide-nav" aria-label="가이드 목록"><ul id="guide-list"></ul></nav>
+      <article class="card guide-body" id="guide-body"><p class="empty">가이드를 불러오는 중입니다…</p></article>
+    </div>
+  </section>
+
+  <!-- 설정 -->
+  <section class="panel" id="p-set" role="tabpanel" aria-labelledby="t-set" hidden>
+    <div class="cols">
+      <div class="card">
+        <h3>일정 기준</h3>
+        <div class="self">
+          <div><label class="label" for="set-start">0주(준비) 시작 월요일</label><input type="date" id="set-start"></div>
+          <div><label class="label" for="set-cycle">사이클</label><select id="set-cycle"><option value="6">6주 + 정리 1주</option><option value="4">4주 + 정리 1주</option></select></div>
+          <div><label class="label" for="set-cstart">사이클 1 시작 주</label><select id="set-cstart"><option value="1">1주부터</option><option value="2">2주부터(팀 약속 다음 주)</option><option value="3">3주부터</option></select></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>내 업무 캘린더용 일정 파일 받기(.ics)</h3>
+        <p class="ex" id="set-ics-hint"></p>
+        <div class="row"><a class="btn primary" href="/api/calendar.ics" download>일정 파일 받기(.ics)</a></div>
+      </div>
+      <div class="card">
+        <h3>쉬는 날</h3>
+        <p class="ex">막힘 시계는 토·일과 아래 날짜를 세지 않습니다. 2026-10~2027-12 평일 공휴일(대체공휴일 포함)을 넣어 두었습니다. 회사 휴무일이 다르면 고쳐 주세요. 팀장 부재(당번이 정해지기 전) 기간도 여기에 넣으면 그동안 온 막힘은 복귀일부터 셉니다. 한 줄에 날짜 하나(YYYY-MM-DD 이름)입니다.</p>
+        <textarea id="set-holidays" class="mono" aria-label="쉬는 날 목록" rows="8"></textarea>
+        <div class="row end"><button class="btn" id="set-hol-save" type="button">쉬는 날 저장</button></div>
+      </div>
+      <div class="card">
+        <h3>회사 주간보고 양식</h3>
+        <p class="ex">회사 양식의 칸 제목만 붙여 넣으세요(지난주 내용은 지우고). 금요일 초안이 그 칸에 맞춰 채웁니다.</p>
+        <p class="ex" id="set-tpl-hint"></p>
+        <textarea id="set-template" class="mono" aria-label="회사 주간보고 양식" rows="8"></textarea>
+        <div class="row end"><button class="btn primary" id="set-save" type="button">저장</button></div>
+      </div>
+      <div class="card">
+        <h3>데이터 내보내기·가져오기</h3>
+        <p class="ex" id="set-exp-hint"></p>
+        <div class="row"><a class="btn" href="/api/export" download>데이터 내보내기(.json)</a></div>
+        <label class="label" for="imp-file">가져오기(지금 기록을 모두 바꿈)</label>
+        <input type="file" id="imp-file" accept="application/json,.json">
+        <p class="ex" id="imp-status" role="status"></p>
+        <div class="row"><button class="btn danger" id="imp-go" type="button" hidden>가져오기(모두 교체)</button></div>
+      </div>
+      <div class="card">
+        <h3>사내 AI</h3>
+        <div id="ai-status"></div>
+      </div>
+      <div class="card">
+        <h3>이 수첩의 데이터</h3>
+        <ul class="olist tight" id="privacy"></ul>
+        <div class="row">
+          <button class="btn" id="wipe-old" type="button">지난 사이클 원문 지우기</button>
+          <button class="btn danger" id="wipe-all" type="button">모두 지우기</button>
+        </div>
+        <p class="ex" id="wipe-status" role="status"></p>
+      </div>
+      <div class="card">
+        <h3>연결</h3>
+        <p class="ex">이 버전은 Jira·Confluence·Synology Chat과 직접 연결하지 않습니다. 복사해서 붙여 넣는 방식으로 씁니다. 인터넷에 나가는 연결도 없습니다.</p>
+        <div class="row"><button class="btn quiet" id="logout" type="button" hidden>로그아웃</button></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot ex" id="footer"></footer>
+</div>
+
+<main class="login" id="login" hidden>
+  <form class="card" id="login-form" autocomplete="on">
+    <h1>관리 수첩</h1>
+    <label class="label" for="login-pw">비밀번호</label>
+    <input type="password" id="login-pw" autocomplete="current-password" required>
+    <div class="row"><button class="btn primary" id="login-go" type="submit">들어가기</button></div>
+    <p class="ex" id="login-status" role="status"></p>
+  </form>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

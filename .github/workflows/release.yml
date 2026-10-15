@@ -1,0 +1,196 @@
+# 태그(v*)를 올리면 GHCR 과 Docker Hub 에 멀티아키 이미지를 올립니다.
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# - GHCR: 저장소 기본 GITHUB_TOKEN 으로 올립니다(permissions: packages: write).
+# - Docker Hub: 저장소 Secrets 에 DOCKERHUB_USERNAME, DOCKERHUB_TOKEN 이 있을 때만 올립니다.
+#   없으면 그 단계는 건너뜁니다.
+# - push 전에 go vet/test, smoke 시험(--network none --read-only), trivy(HIGH·CRITICAL 0건)를 통과해야 합니다.
+# - SBOM 과 provenance(mode=max)를 이미지에 함께 붙입니다.
+# - 공급망 보호: 액션은 커밋 SHA, Trivy 는 digest 로 고정합니다(올릴 때 주석의 버전과 함께 바꿉니다).
+#   Trivy 에는 docker.sock 을 넘기지 않고, docker save 로 만든 tar 만 읽기 전용으로 넘깁니다.
+#   Docker Hub 비밀값은 그 값이 필요한 단계에만 env 로 넘깁니다.
+#
+# 처음 한 번: GHCR 패키지는 비공개로 만들어집니다.
+#   GitHub → Packages → manager-notebook → Package settings → Change visibility → Public
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PLATFORMS: linux/amd64,linux/arm64
+  TRIVY_IMAGE: aquasec/trivy:0.65.0@sha256:a22415a38938a56c379387a8163fcb0ce38b10ace73e593475d3658d578b2436
+  CHECK_TAG: manager-notebook:ci
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # GITHUB_TOKEN 을 .git/config 에 남기지 않습니다(뒤 단계에서 쓸 일이 없음).
+          persist-credentials: false
+
+      - name: Version and tags
+        id: meta
+        shell: bash
+        env:
+          # secrets 는 if: 에서 바로 쓸 수 없어서, 있는지 확인하는 이 단계에만 넘깁니다.
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::태그는 v1.0.0 같은 형식이어야 합니다: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          GHCR="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/manager-notebook"
+          TAGS=("$GHCR:$VERSION" "$GHCR:latest")
+          HUB_ENABLED=false
+          if [[ -n "${DOCKERHUB_USERNAME}" && -n "${DOCKERHUB_TOKEN}" ]]; then
+            HUB_ENABLED=true
+            HUB="docker.io/${DOCKERHUB_USERNAME,,}/manager-notebook"
+            TAGS+=("$HUB:$VERSION" "$HUB:latest")
+          fi
+          {
+            echo "version=$VERSION"
+            echo "ghcr=$GHCR"
+            echo "hub_enabled=$HUB_ENABLED"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "tags<<__TAGS__"
+            printf '%s\n' "${TAGS[@]}"
+            echo "__TAGS__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet / go test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        # 빌드 단계가 $BUILDPLATFORM 에서 Go 교차 컴파일을 하므로 QEMU 는 필요 없습니다.
+
+      - name: Build check image (amd64, local)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.CHECK_TAG }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (--network none --read-only)
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/smoke.sh "$CHECK_TAG"
+
+      - name: Trivy scan (HIGH, CRITICAL = 0)
+        # docker.sock 대신 이미지 tar 만 읽기 전용으로 넘깁니다(스캐너가 러너의 Docker 를 쓰지 못하게).
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/scan"
+          docker save "$CHECK_TAG" -o "$RUNNER_TEMP/scan/image.tar"
+          docker run --rm \
+            -v "$RUNNER_TEMP/scan:/scan:ro" \
+            "$TRIVY_IMAGE" image \
+              --input /scan/image.tar \
+              --scanners vuln \
+              --severity HIGH,CRITICAL \
+              --exit-code 1 \
+              --no-progress
+          rm -rf "$RUNNER_TEMP/scan"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: steps.meta.outputs.hub_enabled == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker Hub skipped
+        if: steps.meta.outputs.hub_enabled != 'true'
+        run: echo "::notice::DOCKERHUB_USERNAME 또는 DOCKERHUB_TOKEN secret 이 없어 Docker Hub push 를 건너뜁니다. GHCR 에만 올립니다."
+
+      - name: Build and push (multi-arch, SBOM, provenance)
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.title=manager-notebook
+            index:org.opencontainers.image.description=인터넷이 막힌 PC에서 쓰는 개인 관리 수첩. 외부 연결 없음, 데이터는 /data 볼륨에만 저장.
+            index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            index:org.opencontainers.image.licenses=MIT
+            index:org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+
+      - name: Verify pushed image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          GHCR: ${{ steps.meta.outputs.ghcr }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          REF="$GHCR:$VERSION"
+          docker buildx imagetools inspect "$REF"
+          SBOM_JSON=$(docker buildx imagetools inspect "$REF" --format '{{json .SBOM}}')
+          PROV_JSON=$(docker buildx imagetools inspect "$REF" --format '{{json .Provenance}}')
+          [[ $SBOM_JSON == *SPDX* ]] || { echo "::error::SBOM 이 없습니다"; exit 1; }
+          [[ $PROV_JSON == *SLSA* ]] || { echo "::error::provenance 가 없습니다"; exit 1; }
+          {
+            echo "## manager-notebook $VERSION"
+            echo
+            echo "- digest: \`$DIGEST\`"
+            echo "- 아키텍처: $PLATFORMS"
+            echo "- 태그:"
+            while IFS= read -r t; do
+              if [[ -n $t ]]; then echo "  - \`$t\`"; fi
+            done <<< "$TAGS"
+            echo
+            echo "GHCR 패키지가 처음 만들어졌다면 Package settings 에서 Public 으로 바꿔 주세요."
+          } >> "$GITHUB_STEP_SUMMARY"
