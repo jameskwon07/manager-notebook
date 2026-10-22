@@ -93,10 +93,10 @@ $IMG = "ghcr.io/jameskwon07/manager-notebook:2.0.0"
 **2. 실행**
 
 ```powershell
-docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook-data:/data --restart unless-stopped $IMG
+docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook:/data --restart unless-stopped $IMG
 ```
 
-- 볼륨 `manager-notebook-data` 는 처음 실행할 때 저절로 만들어집니다. 모든 기록이 여기에 남습니다.
+- 볼륨 `manager-notebook` 는 처음 실행할 때 저절로 만들어집니다. 모든 기록이 여기에 남습니다.
 - 비밀번호나 사내 AI 를 쓰려면 아래 '설정 파일 쓰기' 를 먼저 보세요.
 
 **3. 열기**
@@ -124,7 +124,7 @@ curl.exe http://127.0.0.1:8080/api/health
 아래 옵션을 붙여도 동작합니다. 쓰기는 `/data` 에만 합니다. 로그 파일 크기도 30MB 안으로 묶습니다.
 
 ```powershell
-docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook-data:/data --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 $IMG
+docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook:/data --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 $IMG
 ```
 
 ## 1.0에서 올리기
@@ -141,7 +141,7 @@ docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook
 docker inspect manager-notebook --format "{{range .Mounts}}{{.Name}} {{end}}"
 ```
 
-나온 이름(1.0 README 대로 했다면 `manager-notebook`)을 `$VOL` 에 넣습니다.
+나온 이름(1.0 README 대로 했다면 `manager-notebook`, 2.0 README 와 같은 이름)을 `$VOL` 에 넣습니다. 다른 이름이 나오면 그 이름을 씁니다.
 
 ```powershell
 $VOL = "manager-notebook"
@@ -235,13 +235,12 @@ notepad notebook.env
 
 ```powershell
 docker rm -f manager-notebook
-docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook-data:/data --restart unless-stopped --env-file "$HOME\manager-notebook\notebook.env" $IMG
+docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook:/data --restart unless-stopped --env-file "$HOME\manager-notebook\notebook.env" $IMG
 ```
 
 **설정을 바꾼 뒤에는** 위처럼 컨테이너를 지우고 다시 만듭니다. 데이터는 볼륨에 있어서 그대로입니다.
 `docker restart` 만으로는 바뀐 설정이 들어가지 않습니다.
 
-1.0에서 올라왔다면 아래 명령들의 `manager-notebook-data` 를 1.0 볼륨 이름(`$VOL`)으로 바꿔 읽으세요.
 
 ## 비밀번호 켜기
 
@@ -295,7 +294,7 @@ docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook
 3. 실행할 때 `-v` 를 하나 더 붙입니다.
    ```powershell
    docker rm -f manager-notebook
-   docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook-data:/data -v C:\certs\company-ca.pem:/certs/company-ca.pem:ro --restart unless-stopped --env-file "$HOME\manager-notebook\notebook.env" $IMG
+   docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook:/data -v C:\certs\company-ca.pem:/certs/company-ca.pem:ro --restart unless-stopped --env-file "$HOME\manager-notebook\notebook.env" $IMG
    ```
 4. `docker logs --tail 50 manager-notebook` 에서 `사내 인증서 1개 읽음` 을 확인합니다. 못 읽으면 `경고: SSL_CERT_FILE(...)에서 인증서를 못 읽었습니다` 가 보입니다.
 
@@ -323,7 +322,7 @@ docker rm -v nb-cert
 3. 컨테이너만 바꿉니다. 데이터는 볼륨에 남습니다.
    ```powershell
    docker rm -f manager-notebook
-   docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook-data:/data --restart unless-stopped $IMG
+   docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook:/data --restart unless-stopped $IMG
    ```
    (`notebook.env` 를 쓰면 `--env-file "$HOME\manager-notebook\notebook.env"` 를 붙입니다.)
 4. 문제가 있으면 이전 버전 태그로 다시 만듭니다.
@@ -340,13 +339,13 @@ docker rm -v nb-cert
 **볼륨 통째로**
 
 이 이미지에는 셸이 없습니다(distroless). 그래서 공개 `busybox` 이미지로 압축합니다.
-잠깐 멈추고 하면 파일이 깨지지 않습니다. (1.0에서 올라왔다면 `manager-notebook-data` 를 `$VOL` 로 바꿔 읽으세요.)
+잠깐 멈추고 하면 파일이 깨지지 않습니다.
 
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\manager-notebook" | Out-Null
 cd "$HOME\manager-notebook"
 docker stop manager-notebook
-docker run --rm -v manager-notebook-data:/data:ro -v "${PWD}:/backup" busybox:1.37 tar czf /backup/manager-notebook-backup.tgz -C /data .
+docker run --rm -v manager-notebook:/data:ro -v "${PWD}:/backup" busybox:1.37 tar czf /backup/manager-notebook-backup.tgz -C /data .
 docker start manager-notebook
 ```
 
@@ -355,7 +354,7 @@ docker start manager-notebook
 ```powershell
 cd "$HOME\manager-notebook"
 docker stop manager-notebook
-docker run --rm -v manager-notebook-data:/data -v "${PWD}:/backup" busybox:1.37 sh -c "rm -rf /data/* && tar xzf /backup/manager-notebook-backup.tgz -C /data && chown -R 65532:65532 /data"
+docker run --rm -v manager-notebook:/data -v "${PWD}:/backup" busybox:1.37 sh -c "rm -rf /data/* && tar xzf /backup/manager-notebook-backup.tgz -C /data && chown -R 65532:65532 /data"
 docker start manager-notebook
 ```
 
@@ -391,7 +390,7 @@ docker start manager-notebook
 
 ```powershell
 docker rm -f manager-notebook
-docker volume rm manager-notebook-data
+docker volume rm manager-notebook
 docker image rm $IMG
 ```
 
@@ -466,7 +465,7 @@ Remove-Item image.tar
 | `open ...notebook.env: no such file` | 설정 파일 경로가 틀렸습니다. `"$HOME\manager-notebook\notebook.env"` 가 있는지 봅니다. 쓰지 않는다면 `--env-file ...` 을 빼고 실행합니다 |
 | `docker pull` 실패 | 회사 미러 주소나 프록시가 필요한지 IT 에 묻습니다. 다른 레지스트리 주소로도 해 봅니다 |
 | 상태가 `unhealthy` | `docker logs --tail 50 manager-notebook` 과 `docker inspect --format "{{json .State.Health}}" manager-notebook` 을 봅니다 |
-| `/data` 쓰기 권한 오류 | 폴더를 직접 붙이지 말고(`-v C:\...:/data`), 이름 있는 볼륨(`-v manager-notebook-data:/data`)을 쓰세요 |
+| `/data` 쓰기 권한 오류 | 폴더를 직접 붙이지 말고(`-v C:\...:/data`), 이름 있는 볼륨(`-v manager-notebook:/data`)을 쓰세요 |
 | 가져오기가 거절됨 | 수첩에서 내보낸 `.json` 파일인지 봅니다(`"format":"manager-notebook-export"`). 거절되면 아무것도 바뀌지 않습니다 |
 | 캘린더에 같은 일정이 두 번 | 1.0 일정이나 지난번 `[관리]` 일정을 지우지 않고 새 파일을 가져온 경우입니다. `[관리]` 일정을 모두 지우고 한 번만 가져옵니다 |
 | 사내 AI 버튼이 안 보임 | 설정 탭의 사내 AI 상태, `LLM_BASE_URL` 철자, `--env-file` 을 붙여 다시 만들었는지 |
