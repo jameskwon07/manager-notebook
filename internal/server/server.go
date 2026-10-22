@@ -180,6 +180,7 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 var staticFiles = map[string]string{
 	"/":             "index.html",
 	"/index.html":   "index.html",
+	"/core.js":      "core.js",
 	"/app.js":       "app.js",
 	"/app.css":      "app.css",
 	"/content.json": "content.json",
@@ -335,15 +336,21 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"version":  s.cfg.Version,
 		"settings": st.Settings,
-		"notes":    st.Notes,
-		"blockers": st.Blockers,
-		"fridays":  st.Fridays,
 		"llm":      map[string]any{"enabled": s.cfg.LLM.Enabled(), "model": s.cfg.LLM.Model()},
 		"auth":     s.AuthEnabled(), // 프런트엔드가 로그아웃 버튼을 보일지 정함
-	})
+	}
+	// Every collection key is present, an empty list when there is nothing.
+	for _, c := range store.Collections {
+		docs := st.Colls[c]
+		if docs == nil {
+			docs = []store.Doc{}
+		}
+		out[c] = docs
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) createDoc(w http.ResponseWriter, r *http.Request) {
@@ -435,18 +442,26 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ex)
 }
 
+// importData replaces only the collections whose key is in the file, and the
+// settings when "settings" is present and not null (SPEC2 §3). The body is
+// first split into top-level keys so a missing key differs from an empty one.
 func (s *Server) importData(w http.ResponseWriter, r *http.Request) {
-	var ex store.Export
-	if err := decodeBody(w, r, MaxImportBody, &ex); err != nil {
+	var raw map[string]json.RawMessage
+	if err := decodeBody(w, r, MaxImportBody, &raw); err != nil {
 		s.bodyErr(w, err)
 		return
 	}
-	n, err := s.cfg.Store.Import(r.Context(), &ex)
+	f, err := store.ParseImport(raw)
 	if err != nil {
 		s.storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, n)
+	res, err := s.cfg.Store.Import(r.Context(), f)
+	if err != nil {
+		s.storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) llmProxy(w http.ResponseWriter, r *http.Request) {

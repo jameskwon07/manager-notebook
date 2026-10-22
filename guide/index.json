@@ -1,32 +1,26 @@
 [
  {
-  "slug": "guide",
-  "title": "실행 가이드",
+  "slug": "start",
+  "title": "수첩 2 쓰는 법",
   "order": 0,
-  "file": "00-guide.md"
+  "file": "00-start.md"
  },
  {
-  "slug": "kickoff",
-  "title": "시작 준비",
+  "slug": "raci",
+  "title": "역할과 책임(RACI)",
   "order": 1,
-  "file": "01-kickoff.md"
+  "file": "01-raci.md"
  },
  {
-  "slug": "settings",
-  "title": "끄기·설정",
+  "slug": "watch",
+  "title": "조심할 것",
   "order": 2,
-  "file": "02-settings.md"
- },
- {
-  "slug": "charter",
-  "title": "팀 약속(헌장)",
-  "order": 3,
-  "file": "03-charter.md"
+  "file": "02-watch.md"
  },
  {
   "slug": "templates",
-  "title": "틀",
-  "order": 4,
-  "file": "04-templates.md"
+  "title": "양식과 문장",
+  "order": 3,
+  "file": "03-templates.md"
  }
 ]

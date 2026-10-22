@@ -56,10 +56,12 @@ type Guide struct {
 // ErrNotFound is returned for unknown slugs.
 var ErrNotFound = errors.New("guide not found")
 
-// Render converts Markdown to HTML with GFM (tables, task lists, strikethrough,
-// autolinks). Raw HTML is omitted.
+// Render converts Markdown to HTML with GFM tables, task lists and autolinks.
+// Strikethrough is left out on purpose: Korean text writes ranges as "1~2개",
+// and two such ranges in one cell would otherwise be struck through.
+// Raw HTML is omitted.
 func Render(src []byte) (string, error) {
-	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
+	md := goldmark.New(goldmark.WithExtensions(extension.Table, extension.Linkify, extension.TaskList))
 	var buf bytes.Buffer
 	if err := md.Convert(src, &buf); err != nil {
 		return "", err

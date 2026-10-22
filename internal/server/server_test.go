@@ -40,11 +40,12 @@ func newEnv(t *testing.T, mod func(*Config)) *env {
 	}, "guide")
 	var logBuf bytes.Buffer
 	cfg := Config{
-		Version: "1.0.0",
+		Version: "2.0.0",
 		Store:   st,
 		Guide:   g,
 		Web: fstest.MapFS{
 			"index.html":   {Data: []byte("<!doctype html><title>관리 수첩</title>")},
+			"core.js":      {Data: []byte("window.NBCore={}")},
 			"app.js":       {Data: []byte("console.log(1)")},
 			"app.css":      {Data: []byte("body{}")},
 			"content.json": {Data: []byte(`{"app":{}}`)},
@@ -110,7 +111,7 @@ func wantErr(t *testing.T, resp *http.Response, b []byte, status int, code strin
 func TestHealthAndHeaders(t *testing.T) {
 	e := newEnv(t, nil)
 	resp, b := e.do("GET", "/api/health", "")
-	if resp.StatusCode != 200 || !strings.Contains(string(b), `"version":"1.0.0"`) || !strings.Contains(string(b), `"ok":true`) {
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"version":"2.0.0"`) || !strings.Contains(string(b), `"ok":true`) {
 		t.Fatalf("health %d %s", resp.StatusCode, b)
 	}
 	for _, p := range []string{"/api/health", "/", "/nope", "/api/nope"} {
@@ -130,6 +131,7 @@ func TestStaticFiles(t *testing.T) {
 	e := newEnv(t, nil)
 	cases := map[string]string{
 		"/":             "text/html; charset=utf-8",
+		"/core.js":      "text/javascript; charset=utf-8",
 		"/app.js":       "text/javascript; charset=utf-8",
 		"/app.css":      "text/css; charset=utf-8",
 		"/content.json": "application/json; charset=utf-8",
@@ -141,7 +143,11 @@ func TestStaticFiles(t *testing.T) {
 			t.Errorf("%s: %d %s", p, resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
 	}
-	resp, _ := e.do("GET", "/../go.mod", "")
+	resp, b := e.do("GET", "/core.js", "")
+	if string(b) != "window.NBCore={}" {
+		t.Errorf("/core.js body %q", b)
+	}
+	resp, _ = e.do("GET", "/../go.mod", "")
 	if resp.StatusCode == 200 {
 		t.Error("path escape served")
 	}
@@ -247,27 +253,141 @@ func TestSettingsExportImport(t *testing.T) {
 	}
 	e.do("POST", "/api/docs/notes", `{"text":"one"}`)
 	e.do("POST", "/api/docs/blockers", `{"text":"two"}`)
+	e.do("POST", "/api/docs/requests", `{"what":"req","size":"S","status":"접수"}`)
+	e.do("PUT", "/api/docs/weeks/2026-10-26", `{"signals":{"reviewEmpty":true},"note":""}`)
 
 	resp, exp := e.do("GET", "/api/export", "")
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Disposition") != `attachment; filename="manager-notebook-20261016.json"` {
 		t.Fatalf("export %d %v", resp.StatusCode, resp.Header)
 	}
 	m := jsonMap(t, exp)
-	if m["format"] != "manager-notebook-export" || m["version"] != "1.0.0" || m["exportedAt"] == nil {
+	if m["format"] != "manager-notebook-export" || m["version"] != "2.0.0" || m["exportedAt"] != "2026-10-16T09:00:00+09:00" {
 		t.Fatalf("export body %s", exp)
+	}
+	if len(m) != 4+len(store.Collections) {
+		t.Fatalf("export keys %d: %s", len(m), exp)
+	}
+	for _, c := range store.Collections {
+		if _, ok := m[c].([]any); !ok {
+			t.Fatalf("export %s missing: %s", c, exp)
+		}
+	}
+	if !strings.HasPrefix(string(exp), `{"format":"manager-notebook-export","version":"2.0.0","exportedAt":`) {
+		t.Fatalf("export key order: %.80s", exp)
 	}
 
 	e.do("POST", "/api/docs/notes", `{"text":"after export"}`)
+	e.do("POST", "/api/docs/risks", `{"code":"R1","title":"after export"}`)
 	resp, b = e.do("POST", "/api/import", string(exp))
-	if resp.StatusCode != 200 || string(bytes.TrimSpace(b)) != `{"notes":1,"blockers":1,"fridays":0}` {
+	want := `{"replaced":["notes","blockers","fridays","requests","programs","decisions","mapitems","timelog","weeks","cycles","risks"],` +
+		`"counts":{"blockers":1,"cycles":0,"decisions":0,"fridays":0,"mapitems":0,"notes":1,"programs":0,"requests":1,"risks":0,"timelog":0,"weeks":1},"settings":true}`
+	if resp.StatusCode != 200 || string(bytes.TrimSpace(b)) != want {
 		t.Fatalf("import %d %s", resp.StatusCode, b)
 	}
 	_, b = e.do("GET", "/api/state", "")
 	if strings.Contains(string(b), "after export") || !strings.Contains(string(b), `"cycleWeeks":6`) {
 		t.Fatalf("import did not replace: %s", b)
 	}
-	resp, b = e.do("POST", "/api/import", `{"format":"other"}`)
-	wantErr(t, resp, b, 400, "bad_format")
+
+	// A 1.0 export replaces only notes, blockers, fridays and settings.
+	e.do("POST", "/api/docs/programs", `{"order":1,"name":"프로그램 1","active":true}`)
+	v1 := `{"format":"manager-notebook-export","version":"1.0.0","exportedAt":"2026-10-16T09:00:00+09:00",` +
+		`"settings":{"startDate":"2026-11-02"},"notes":[{"id":"n1","kind":"q","text":"1.0 메모"}],"blockers":[],"fridays":[]}`
+	resp, b = e.do("POST", "/api/import", v1)
+	if resp.StatusCode != 200 || string(bytes.TrimSpace(b)) !=
+		`{"replaced":["notes","blockers","fridays"],"counts":{"blockers":0,"fridays":0,"notes":1},"settings":true}` {
+		t.Fatalf("1.0 import %d %s", resp.StatusCode, b)
+	}
+	_, b = e.do("GET", "/api/state", "")
+	st := jsonMap(t, b)
+	if len(st["programs"].([]any)) != 1 || len(st["requests"].([]any)) != 1 || len(st["weeks"].([]any)) != 1 ||
+		len(st["blockers"].([]any)) != 0 || st["settings"].(map[string]any)["startDate"] != "2026-11-02" {
+		t.Fatalf("state after 1.0 import: %s", b)
+	}
+
+	// settings null and missing keys keep everything else.
+	resp, b = e.do("POST", "/api/import", `{"format":"manager-notebook-export","settings":null,"decisions":[]}`)
+	if resp.StatusCode != 200 || string(bytes.TrimSpace(b)) != `{"replaced":["decisions"],"counts":{"decisions":0},"settings":false}` {
+		t.Fatalf("partial import %d %s", resp.StatusCode, b)
+	}
+	_, b = e.do("GET", "/api/state", "")
+	if !strings.Contains(string(b), `"startDate":"2026-11-02"`) || !strings.Contains(string(b), "1.0 메모") {
+		t.Fatalf("partial import changed other data: %s", b)
+	}
+
+	for _, bad := range []string{`{"format":"other"}`, `{}`, `null`, `{"format":"manager-notebook-export","notes":{}}`} {
+		resp, b = e.do("POST", "/api/import", bad)
+		wantErr(t, resp, b, 400, "bad_format")
+	}
+	resp, b = e.do("POST", "/api/import", `[1,2]`)
+	wantErr(t, resp, b, 400, "bad_json")
+	resp, b = e.do("POST", "/api/import", `{"format":`)
+	wantErr(t, resp, b, 400, "bad_json")
+}
+
+// TestStateHasAllCollections: /api/state always carries the 11 collection
+// keys, empty lists included.
+func TestStateHasAllCollections(t *testing.T) {
+	e := newEnv(t, nil)
+	_, b := e.do("GET", "/api/state", "")
+	st := jsonMap(t, b)
+	want := []string{"notes", "blockers", "fridays", "requests", "programs", "decisions", "mapitems", "timelog", "weeks", "cycles", "risks"}
+	for _, c := range want {
+		l, ok := st[c].([]any)
+		if !ok || len(l) != 0 {
+			t.Fatalf("state %s: %s", c, b)
+		}
+	}
+	for _, k := range []string{"version", "settings", "llm", "auth"} {
+		if _, ok := st[k]; !ok {
+			t.Fatalf("state lacks %s: %s", k, b)
+		}
+	}
+	if len(st) != len(want)+4 || st["version"] != "2.0.0" || st["settings"] != nil {
+		t.Fatalf("state keys: %s", b)
+	}
+}
+
+// TestNewCollectionsCRUD: POST, PUT, PATCH and DELETE work on every 2.0
+// collection; other names are 404.
+func TestNewCollectionsCRUD(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, c := range []string{"requests", "programs", "decisions", "mapitems", "timelog", "weeks", "cycles", "risks"} {
+		resp, b := e.do("POST", "/api/docs/"+c, `{"text":"새 기록","n":1}`)
+		if resp.StatusCode != 201 {
+			t.Fatalf("%s create %d %s", c, resp.StatusCode, b)
+		}
+		id := jsonMap(t, b)["id"].(string)
+		resp, b = e.do("PATCH", "/api/docs/"+c+"/"+id, `{"n":null,"done":true}`)
+		m := jsonMap(t, b)
+		if _, ok := m["n"]; resp.StatusCode != 200 || ok || m["done"] != true || m["text"] != "새 기록" {
+			t.Fatalf("%s patch %d %s", c, resp.StatusCode, b)
+		}
+		resp, b = e.do("PUT", "/api/docs/"+c+"/2026-10-26", `{"checks":{"0":true}}`)
+		if resp.StatusCode != 200 || jsonMap(t, b)["id"] != "2026-10-26" {
+			t.Fatalf("%s put %d %s", c, resp.StatusCode, b)
+		}
+		_, b = e.do("GET", "/api/state", "")
+		if l := jsonMap(t, b)[c].([]any); len(l) != 2 {
+			t.Fatalf("%s state %s", c, b)
+		}
+		resp, _ = e.do("DELETE", "/api/docs/"+c+"/"+id, "")
+		if resp.StatusCode != 204 {
+			t.Fatalf("%s delete %d", c, resp.StatusCode)
+		}
+		_, b = e.do("GET", "/api/state", "")
+		if l := jsonMap(t, b)[c].([]any); len(l) != 1 {
+			t.Fatalf("%s after delete %s", c, b)
+		}
+	}
+	for _, p := range []string{"/api/docs/tasks", "/api/docs/request", "/api/docs/Programs", "/api/docs/people"} {
+		resp, b := e.do("POST", p, `{}`)
+		wantErr(t, resp, b, 404, "not_found")
+		resp, b = e.do("PATCH", p+"/x", `{}`)
+		wantErr(t, resp, b, 404, "not_found")
+		resp, b = e.do("DELETE", p+"/x", "")
+		wantErr(t, resp, b, 404, "not_found")
+	}
 }
 
 func TestCalendarAndGuide(t *testing.T) {
@@ -277,12 +397,12 @@ func TestCalendarAndGuide(t *testing.T) {
 		resp.Header.Get("Content-Disposition") != `attachment; filename="manager-notebook.ics"` {
 		t.Fatalf("ics %d %v", resp.StatusCode, resp.Header)
 	}
-	if strings.Count(string(b), "BEGIN:VEVENT") != 15 || !strings.Contains(string(b), "EXDATE") {
-		t.Fatal("ics body")
+	if strings.Count(string(b), "BEGIN:VEVENT") != 30 || !strings.Contains(string(b), "EXDATE;TZID=Asia/Seoul:20261225T135500,20270101T135500") {
+		t.Fatalf("ics body: %d events", strings.Count(string(b), "BEGIN:VEVENT"))
 	}
 	e.do("PUT", "/api/settings", `{"startDate":"2026-11-02","holidays":""}`)
 	_, b = e.do("GET", "/api/calendar.ics", "")
-	if !strings.Contains(string(b), "UID:weekly-mon-blocker-2026-11-02@manager-notebook") {
+	if !strings.Contains(string(b), "UID:friday-read-2026-11-02-v2@manager-notebook") || strings.Contains(string(b), "EXDATE") {
 		t.Fatal("ics ignores settings")
 	}
 
@@ -365,7 +485,7 @@ func TestAuth(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.Password = "pw-123" })
 
 	// Open paths.
-	for _, p := range []string{"/api/health", "/", "/app.js", "/app.css", "/content.json", "/favicon.svg", "/login", "/login.css"} {
+	for _, p := range []string{"/api/health", "/", "/core.js", "/app.js", "/app.css", "/content.json", "/favicon.svg", "/login", "/login.css"} {
 		resp, _ := e.do("GET", p, "")
 		if resp.StatusCode != 200 {
 			t.Errorf("%s should be open, got %d", p, resp.StatusCode)

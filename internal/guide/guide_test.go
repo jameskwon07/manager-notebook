@@ -47,6 +47,16 @@ func TestLoadAndRender(t *testing.T) {
 	}
 }
 
+func TestRangeTildeIsNotStrikethrough(t *testing.T) {
+	html, err := Render([]byte("활성 6~7개면 서브 구현은 1~2개입니다. ~~둘~~도 그대로 둡니다.\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "<del>") || !strings.Contains(html, "6~7개면 서브 구현은 1~2개") {
+		t.Fatalf("tilde ranges changed: %s", html)
+	}
+}
+
 func TestMissingOrBadIndex(t *testing.T) {
 	g, _, err := Load(fstest.MapFS{}, "guide")
 	if err != nil || len(g.List()) != 0 {

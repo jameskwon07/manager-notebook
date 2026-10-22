@@ -1,11 +1,12 @@
 // Package store keeps every notebook record in one SQLite file.
 //
 // Documents are stored as opaque JSON objects; the server does not inspect
-// their content (SPEC §5). The only fields the store touches are "id" (set to
+// their content (SPEC §5, SPEC2 §4). The only fields the store touches are "id" (set to
 // the document key) and nothing else.
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -31,8 +32,15 @@ const (
 	settingsID    = "main"
 )
 
-// Collections that the HTTP API may touch directly.
-var Collections = []string{"notes", "blockers", "fridays"}
+// Collections that the HTTP API may touch directly, in a fixed order
+// (state, export and import responses list them in this order).
+var Collections = []string{
+	"notes", "blockers", "fridays", // 1.0
+	"requests", "programs", "decisions", "mapitems", "timelog", "weeks", "cycles", "risks", // 2.0
+}
+
+// V1Collections are the collections a 1.0 export file holds.
+var V1Collections = []string{"notes", "blockers", "fridays"}
 
 var (
 	ErrNotFound   = errors.New("not found")
@@ -43,7 +51,13 @@ var (
 	ErrNotObject  = errors.New("document must be a JSON object")
 	ErrBadFormat  = errors.New("bad export format")
 	idPattern     = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
-	validCollName = map[string]bool{"notes": true, "blockers": true, "fridays": true}
+	validCollName = func() map[string]bool {
+		m := map[string]bool{}
+		for _, c := range Collections {
+			m[c] = true
+		}
+		return m
+	}()
 )
 
 // Doc is one JSON object. It always carries "id" when returned by the store.
@@ -376,29 +390,24 @@ func (s *Store) PutSettings(ctx context.Context, d Doc) (Doc, error) {
 	return cp, nil
 }
 
-// State is everything the front end needs on load.
+// State is everything the front end needs on load: the settings (nil when
+// never saved) and every collection (never nil, maybe empty).
 type State struct {
-	Settings Doc   `json:"settings"`
-	Notes    []Doc `json:"notes"`
-	Blockers []Doc `json:"blockers"`
-	Fridays  []Doc `json:"fridays"`
+	Settings Doc
+	Colls    map[string][]Doc
 }
 
 // LoadState reads settings and every collection.
 func (s *Store) LoadState(ctx context.Context) (*State, error) {
-	st := &State{}
+	st := &State{Colls: make(map[string][]Doc, len(Collections))}
 	var err error
 	if st.Settings, err = s.Settings(ctx); err != nil {
 		return nil, err
 	}
-	if st.Notes, err = s.List(ctx, "notes"); err != nil {
-		return nil, err
-	}
-	if st.Blockers, err = s.List(ctx, "blockers"); err != nil {
-		return nil, err
-	}
-	if st.Fridays, err = s.List(ctx, "fridays"); err != nil {
-		return nil, err
+	for _, c := range Collections {
+		if st.Colls[c], err = s.List(ctx, c); err != nil {
+			return nil, err
+		}
 	}
 	return st, nil
 }
@@ -406,35 +415,158 @@ func (s *Store) LoadState(ctx context.Context) (*State, error) {
 // ExportFormat is the "format" value of an export file.
 const ExportFormat = "manager-notebook-export"
 
-// Export is the export/import file shape (SPEC §4).
+// Export is the export file (SPEC2 §3): format, version, exportedAt,
+// settings and one flat key per collection.
 type Export struct {
-	Format     string `json:"format"`
-	Version    string `json:"version"`
-	ExportedAt string `json:"exportedAt"`
-	Settings   Doc    `json:"settings"`
-	Notes      []Doc  `json:"notes"`
-	Blockers   []Doc  `json:"blockers"`
-	Fridays    []Doc  `json:"fridays"`
+	Format     string
+	Version    string
+	ExportedAt string
+	Settings   Doc
+	Colls      map[string][]Doc
 }
 
-// ImportCounts is the result of Import.
-type ImportCounts struct {
-	Notes    int `json:"notes"`
-	Blockers int `json:"blockers"`
-	Fridays  int `json:"fridays"`
+// MarshalJSON writes the keys in a fixed order with every collection present.
+func (e *Export) MarshalJSON() ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	put := func(k string, v any) error {
+		if b.Len() > 1 {
+			b.WriteByte(',')
+		}
+		kb, _ := json.Marshal(k)
+		vb, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		b.Write(kb)
+		b.WriteByte(':')
+		b.Write(vb)
+		return nil
+	}
+	if err := put("format", e.Format); err != nil {
+		return nil, err
+	}
+	if err := put("version", e.Version); err != nil {
+		return nil, err
+	}
+	if err := put("exportedAt", e.ExportedAt); err != nil {
+		return nil, err
+	}
+	if err := put("settings", e.Settings); err != nil {
+		return nil, err
+	}
+	for _, c := range Collections {
+		docs := e.Colls[c]
+		if docs == nil {
+			docs = []Doc{}
+		}
+		if err := put(c, docs); err != nil {
+			return nil, err
+		}
+	}
+	b.WriteByte('}')
+	return b.Bytes(), nil
 }
 
-// Import replaces every collection and the settings with ex, in one
-// transaction. Docs without a valid "id" get a new one.
-func (s *Store) Import(ctx context.Context, ex *Export) (*ImportCounts, error) {
-	if ex == nil || ex.Format != ExportFormat {
+// MakeExport builds an export of the current data.
+func (s *Store) MakeExport(ctx context.Context, version string) (*Export, error) {
+	st, err := s.LoadState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Export{
+		Format:     ExportFormat,
+		Version:    version,
+		ExportedAt: s.now().Format(time.RFC3339),
+		Settings:   st.Settings,
+		Colls:      st.Colls,
+	}, nil
+}
+
+// ImportFile is a parsed import file. Only the collections whose key was in
+// the file are in Colls; Settings is nil when the key was missing or null.
+type ImportFile struct {
+	Settings Doc
+	Colls    map[string][]Doc
+}
+
+// ParseImport reads an import file that was first split into its top-level
+// keys, so a missing key can be told apart from an empty one (SPEC2 §3):
+//   - "format" must be ExportFormat, otherwise ErrBadFormat.
+//   - a collection key present with an array replaces that collection
+//     (an empty array empties it); missing or null keeps it.
+//   - "settings" present and not null replaces the settings.
+//
+// A 1.0 export holds only notes, blockers, fridays and settings, so the 2.0
+// collections are kept. Unknown keys are ignored.
+func ParseImport(raw map[string]json.RawMessage) (*ImportFile, error) {
+	if raw == nil {
 		return nil, ErrBadFormat
 	}
-	groups := map[string][]Doc{"notes": ex.Notes, "blockers": ex.Blockers, "fridays": ex.Fridays}
+	var format string
+	if err := json.Unmarshal(raw["format"], &format); err != nil || format != ExportFormat {
+		return nil, ErrBadFormat
+	}
+	f := &ImportFile{Colls: map[string][]Doc{}}
+	if v, ok := raw["settings"]; ok && !isNull(v) {
+		var d Doc
+		if err := decodeNumber(v, &d); err != nil || d == nil {
+			return nil, ErrBadFormat
+		}
+		f.Settings = d
+	}
+	for _, c := range Collections {
+		v, ok := raw[c]
+		if !ok || isNull(v) {
+			continue
+		}
+		var docs []Doc
+		if err := decodeNumber(v, &docs); err != nil {
+			return nil, ErrBadFormat
+		}
+		if docs == nil {
+			docs = []Doc{}
+		}
+		f.Colls[c] = docs
+	}
+	return f, nil
+}
+
+func isNull(v json.RawMessage) bool {
+	return len(bytes.TrimSpace(v)) == 0 || string(bytes.TrimSpace(v)) == "null"
+}
+
+// decodeNumber decodes with UseNumber so large numbers survive unchanged.
+func decodeNumber(v json.RawMessage, out any) error {
+	dec := json.NewDecoder(bytes.NewReader(v))
+	dec.UseNumber()
+	return dec.Decode(out)
+}
+
+// ImportResult is the /api/import response: the collections that were
+// replaced (in Collections order), their new counts, and whether the
+// settings were replaced.
+type ImportResult struct {
+	Replaced []string       `json:"replaced"`
+	Counts   map[string]int `json:"counts"`
+	Settings bool           `json:"settings"`
+}
+
+// Import replaces the collections present in f (and the settings when given)
+// in one transaction. Docs without a valid or unique "id" get a new one.
+// On any error nothing is changed.
+func (s *Store) Import(ctx context.Context, f *ImportFile) (*ImportResult, error) {
+	if f == nil {
+		return nil, ErrBadFormat
+	}
 	type row struct{ coll, id, data string }
 	var rows []row
+	res := &ImportResult{Replaced: []string{}, Counts: map[string]int{}}
 	for _, coll := range Collections {
-		docs := groups[coll]
+		docs, ok := f.Colls[coll]
+		if !ok {
+			continue
+		}
 		if len(docs) > MaxDocsPerCol {
 			return nil, ErrLimit
 		}
@@ -454,11 +586,13 @@ func (s *Store) Import(ctx context.Context, ex *Export) (*ImportCounts, error) {
 			}
 			rows = append(rows, row{coll, id, data})
 		}
+		res.Replaced = append(res.Replaced, coll)
+		res.Counts[coll] = len(docs)
 	}
 	var settingsData string
-	if ex.Settings != nil {
-		cp := make(Doc, len(ex.Settings))
-		for k, v := range ex.Settings {
+	if f.Settings != nil {
+		cp := make(Doc, len(f.Settings))
+		for k, v := range f.Settings {
 			cp[k] = v
 		}
 		data, err := encode(settingsID, cp)
@@ -466,6 +600,7 @@ func (s *Store) Import(ctx context.Context, ex *Export) (*ImportCounts, error) {
 			return nil, err
 		}
 		settingsData = data
+		res.Settings = true
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -473,8 +608,15 @@ func (s *Store) Import(ctx context.Context, ex *Export) (*ImportCounts, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM docs WHERE coll IN ('notes','blockers','fridays','settings')`); err != nil {
-		return nil, err
+	for _, coll := range res.Replaced {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM docs WHERE coll=?`, coll); err != nil {
+			return nil, err
+		}
+	}
+	if res.Settings {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM docs WHERE coll=? AND id=?`, settingsColl, settingsID); err != nil {
+			return nil, err
+		}
 	}
 	now := s.stamp()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO docs(coll, id, data, created_at, updated_at) VALUES(?,?,?,?,?)`)
@@ -487,7 +629,7 @@ func (s *Store) Import(ctx context.Context, ex *Export) (*ImportCounts, error) {
 			return nil, err
 		}
 	}
-	if settingsData != "" {
+	if res.Settings {
 		if _, err := stmt.ExecContext(ctx, settingsColl, settingsID, settingsData, now, now); err != nil {
 			return nil, err
 		}
@@ -495,22 +637,5 @@ func (s *Store) Import(ctx context.Context, ex *Export) (*ImportCounts, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &ImportCounts{Notes: len(ex.Notes), Blockers: len(ex.Blockers), Fridays: len(ex.Fridays)}, nil
-}
-
-// MakeExport builds an export of the current data.
-func (s *Store) MakeExport(ctx context.Context, version string) (*Export, error) {
-	st, err := s.LoadState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &Export{
-		Format:     ExportFormat,
-		Version:    version,
-		ExportedAt: s.now().Format(time.RFC3339),
-		Settings:   st.Settings,
-		Notes:      st.Notes,
-		Blockers:   st.Blockers,
-		Fridays:    st.Fridays,
-	}, nil
+	return res, nil
 }

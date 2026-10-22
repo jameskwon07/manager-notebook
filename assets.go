@@ -4,7 +4,7 @@ package assets
 
 import "embed"
 
-// FS holds web/ (index.html, app.js, app.css, content.json, favicon.svg)
+// FS holds web/ (index.html, core.js, app.js, app.css, content.json, favicon.svg)
 // and guide/ (index.json and *.md).
 //
 //go:embed web guide

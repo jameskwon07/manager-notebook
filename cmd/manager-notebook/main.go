@@ -31,8 +31,8 @@ import (
 	"github.com/jameskwon07/manager-notebook/internal/store"
 )
 
-// version is set with -ldflags "-X main.version=1.0.0".
-var version = "1.0.0"
+// version is set with -ldflags "-X main.version=2.0.0".
+var version = "2.0.0"
 
 func main() {
 	if len(os.Args) > 1 {

@@ -3,7 +3,7 @@
 #
 # 쓰는 법
 #   scripts/release.sh <VERSION> <DOCKERHUB_USER>
-#   VERSION=1.0.0 DOCKERHUB_USER=<DOCKERHUB_USER> scripts/release.sh
+#   VERSION=2.0.0 DOCKERHUB_USER=<DOCKERHUB_USER> scripts/release.sh
 #
 # 선택 환경변수
 #   GHCR_REPO=ghcr.io/jameskwon07/manager-notebook   GHCR 이미지 이름
@@ -22,7 +22,7 @@
 #   docker login docker.io -u <DOCKERHUB_USER>        # 비밀번호 대신 Docker Hub 액세스 토큰
 #   docker login ghcr.io -u <GitHub 사용자>          # write:packages 권한이 있는 토큰
 #
-# 순서: 입력 확인 → 로그인 확인 → buildx 준비 → 로컬 빌드 → smoke → trivy → 멀티아키 push → 결과 확인
+# 순서: 입력 확인 → 로그인 확인 → buildx 준비 → 단위 시험(go·node) → 로컬 빌드 → smoke → trivy → 멀티아키 push → 결과 확인
 
 set -euo pipefail
 
@@ -49,9 +49,9 @@ die() { printf 'release: %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. 입력 확인
 say "입력 확인"
-[[ -n $VERSION ]] || die "VERSION 이 없습니다. 예: scripts/release.sh 1.0.0 <DOCKERHUB_USER>"
+[[ -n $VERSION ]] || die "VERSION 이 없습니다. 예: scripts/release.sh 2.0.0 <DOCKERHUB_USER>"
 VERSION=${VERSION#v}
-[[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || die "VERSION 은 1.0.0 같은 형식이어야 합니다: $VERSION"
+[[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || die "VERSION 은 2.0.0 같은 형식이어야 합니다: $VERSION"
 
 if [[ $SKIP_DOCKERHUB != 1 ]]; then
   [[ -n $DOCKERHUB_USER ]] || die "DOCKERHUB_USER 가 없습니다. 두 번째 인자로 주거나 SKIP_DOCKERHUB=1 을 쓰세요."
@@ -151,6 +151,19 @@ if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
 fi
 docker buildx inspect --bootstrap "$BUILDER" >/dev/null
 
+# ---------------------------------------------------------------- 3b. 단위 시험(go·node)
+say "단위 시험: go vet · go test · node --test web/test/"
+if command -v go >/dev/null 2>&1; then
+  (cd "$ROOT_DIR" && go vet ./... && go test ./...) || die "go 시험이 실패했습니다. push 하지 않습니다."
+else
+  printf 'go 가 없어 go 시험은 건너뜁니다(이미지 빌드 안에서 컴파일만 확인).\n'
+fi
+if command -v node >/dev/null 2>&1; then
+  (cd "$ROOT_DIR" && TZ=Asia/Seoul node --test web/test/) || die "화면 계산(core.js) 시험이 실패했습니다. push 하지 않습니다."
+else
+  die "node 가 없어 web/test/ 시험을 돌릴 수 없습니다. Node 18 이상을 설치하세요."
+fi
+
 # ---------------------------------------------------------------- 4. 검사용 로컬 빌드
 LOCAL_TAG="manager-notebook:release-check-$VERSION"
 HOST_ARCH=$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)
@@ -203,7 +216,7 @@ BUILD_ARGS=(
   --provenance=mode=max
   --label "org.opencontainers.image.created=$CREATED"
   --annotation "index:org.opencontainers.image.title=manager-notebook"
-  --annotation "index:org.opencontainers.image.description=인터넷이 막힌 PC에서 쓰는 개인 관리 수첩. 외부 연결 없음, 데이터는 /data 볼륨에만 저장."
+  --annotation "index:org.opencontainers.image.description=프로그램 리드 체계용 개인 관리 수첩. 외부 연결 없음, 데이터는 /data 볼륨에만 저장."
   --annotation "index:org.opencontainers.image.source=https://github.com/jameskwon07/manager-notebook"
   --annotation "index:org.opencontainers.image.licenses=MIT"
   --annotation "index:org.opencontainers.image.version=$VERSION"
