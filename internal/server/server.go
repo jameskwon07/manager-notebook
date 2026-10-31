@@ -53,6 +53,7 @@ type Config struct {
 	Now       func() time.Time
 	FailDelay time.Duration // delay after a wrong password (default 1s)
 	Demo      bool          // demo mode: example data in memory (/api/state says so)
+	Only      string        // "intake": the one-feature page (요청 접수함) is served at /
 }
 
 // Server is an http.Handler.
@@ -186,6 +187,10 @@ var staticFiles = map[string]string{
 	"/app.css":      "app.css",
 	"/content.json": "content.json",
 	"/favicon.svg":  "favicon.svg",
+	"/intake":       "intake.html",
+	"/intake.html":  "intake.html",
+	"/intake.js":    "intake.js",
+	"/intake.css":   "intake.css",
 }
 
 func authExempt(p string) bool {
@@ -343,6 +348,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"llm":      map[string]any{"enabled": s.cfg.LLM.Enabled(), "model": s.cfg.LLM.Model()},
 		"auth":     s.AuthEnabled(), // 프런트엔드가 로그아웃 버튼을 보일지 정함
 		"demo":     s.cfg.Demo,      // 체험 모드면 화면 위에 안내 띠를 보임
+		"only":     s.cfg.Only,      // "intake" 면 요청 접수함만 쓰는 판
 	}
 	// Every collection key is present, an empty list when there is nothing.
 	for _, c := range store.Collections {
@@ -727,6 +733,9 @@ func (emptyFS) Open(string) (fs.File, error) { return nil, fs.ErrNotExist }
 
 func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	name, ok := staticFiles[r.URL.Path]
+	if ok && r.URL.Path == "/" && s.cfg.Only == "intake" {
+		name = "intake.html"
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not_found", "없는 주소입니다.")
 		return

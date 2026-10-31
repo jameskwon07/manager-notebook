@@ -50,6 +50,9 @@ func newEnv(t *testing.T, mod func(*Config)) *env {
 			"app.css":      {Data: []byte("body{}")},
 			"content.json": {Data: []byte(`{"app":{}}`)},
 			"favicon.svg":  {Data: []byte("<svg/>")},
+			"intake.html":  {Data: []byte("<!doctype html><title>요청 접수함</title>")},
+			"intake.js":    {Data: []byte("console.log(2)")},
+			"intake.css":   {Data: []byte(".ib{}")},
 		},
 		Logger:    log.New(&logBuf, "", 0),
 		FailDelay: 10 * time.Millisecond,
@@ -338,12 +341,12 @@ func TestStateHasAllCollections(t *testing.T) {
 			t.Fatalf("state %s: %s", c, b)
 		}
 	}
-	for _, k := range []string{"version", "settings", "llm", "auth", "demo"} {
+	for _, k := range []string{"version", "settings", "llm", "auth", "demo", "only"} {
 		if _, ok := st[k]; !ok {
 			t.Fatalf("state lacks %s: %s", k, b)
 		}
 	}
-	if len(st) != len(want)+5 || st["version"] != "2.0.0" || st["settings"] != nil || st["demo"] != false {
+	if len(st) != len(want)+6 || st["version"] != "2.0.0" || st["settings"] != nil || st["demo"] != false || st["only"] != "" {
 		t.Fatalf("state keys: %s", b)
 	}
 }
@@ -698,5 +701,30 @@ func TestHostErrorMessage(t *testing.T) {
 	wantErr(t, resp, b, 403, "host")
 	if !strings.Contains(string(b), "http://localhost:18080") || strings.Contains(string(b), "NOTEBOOK_PASSWORD") {
 		t.Fatalf("host message: %s", b)
+	}
+}
+
+// TestIntakePage: the one-feature page is served at /intake, and at / when Only is "intake".
+func TestIntakePage(t *testing.T) {
+	e := newEnv(t, nil)
+	for p, want := range map[string]string{"/intake": "요청 접수함", "/intake.js": "console.log(2)", "/intake.css": ".ib{}", "/": "관리 수첩"} {
+		resp, b := e.do("GET", p, "")
+		if resp.StatusCode != 200 || !strings.Contains(string(b), want) {
+			t.Errorf("%s: %d %q", p, resp.StatusCode, b)
+		}
+	}
+	resp, _ := e.do("GET", "/intake.js", "")
+	if ct := resp.Header.Get("Content-Type"); ct != "text/javascript; charset=utf-8" {
+		t.Errorf("intake.js content-type %q", ct)
+	}
+
+	only := newEnv(t, func(c *Config) { c.Only = "intake" })
+	resp, b := only.do("GET", "/", "")
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "요청 접수함") {
+		t.Fatalf("only=intake /: %d %q", resp.StatusCode, b)
+	}
+	_, b = only.do("GET", "/api/state", "")
+	if st := jsonMap(t, b); st["only"] != "intake" {
+		t.Fatalf("state only: %s", b)
 	}
 }

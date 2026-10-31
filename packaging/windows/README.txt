@@ -10,6 +10,12 @@
 이 파일에는 코드 서명이 없습니다. 처음 실행할 때 "Windows의 PC 보호" 창이 뜨면,
 회사 규정이 허용하는 경우에만 [추가 정보] → [실행]을 누릅니다.
 
+[요청 접수함만 쓰기]
+run-intake.cmd 를 두 번 누르면 기능 하나만 있는 화면이 열립니다.
+받은 요청을 붙여 넣고, 빈칸만 되묻고, 근무일 2일 안에 담당 리드에게 넘기는 일만 합니다.
+기록은 전체 수첩과 같아서, 나중에 manager-notebook.exe 로 열어도 그대로 보입니다.
+run-intake-demo.cmd 는 같은 화면을 예시 데이터로 엽니다.
+
 [체험해 보기]
 run-demo.cmd 를 두 번 누르면 예시 데이터로 열립니다(http://localhost:8090).
 체험 모드의 기록은 메모리에만 있고, 창을 닫으면 사라집니다.
@@ -29,6 +35,7 @@ Docker 판에서 옮겨 올 때: Docker 판 설정 탭에서 내보내기 → �
   manager-notebook.exe --data D:\nb     다른 데이터 폴더
   manager-notebook.exe --no-browser     브라우저를 열지 않음
   manager-notebook.exe --demo           체험 모드
+  manager-notebook.exe --only intake    요청 접수함만
   manager-notebook.exe version          버전
 
 [안전]

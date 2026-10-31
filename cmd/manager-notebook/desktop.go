@@ -33,6 +33,7 @@ const usageText = `사용법: manager-notebook [옵션]
   --data 폴더    데이터를 둘 폴더 (기본: Windows는 %LOCALAPPDATA%\manager-notebook, 컨테이너는 /data)
   --port 번호    포트 (기본 8080, 체험 모드 8090). PC에서 실행하면 이 PC 안(127.0.0.1)에서만 열립니다.
   --no-browser   시작할 때 브라우저를 열지 않습니다.
+  --only intake  요청 접수함 하나만 엽니다(전체 수첩과 같은 기록을 씁니다).
 `
 
 // options are the command-line flags.
@@ -41,6 +42,7 @@ type options struct {
 	noBrowser bool
 	dataDir   string
 	port      int
+	only      string // "" (전체 수첩) 또는 "intake"(요청 접수함만)
 }
 
 // parseOptions reads the flags after the program name.
@@ -52,6 +54,7 @@ func parseOptions(args []string) (options, error) {
 	fs.BoolVar(&o.noBrowser, "no-browser", false, "")
 	fs.StringVar(&o.dataDir, "data", "", "")
 	fs.IntVar(&o.port, "port", 0, "")
+	fs.StringVar(&o.only, "only", "", "")
 	if err := fs.Parse(args); err != nil {
 		return o, fmt.Errorf("옵션을 읽지 못했습니다: %v", err)
 	}
@@ -62,6 +65,10 @@ func parseOptions(args []string) (options, error) {
 		return o, fmt.Errorf("포트는 1~65535 사이여야 합니다: %d", o.port)
 	}
 	o.dataDir = strings.TrimSpace(o.dataDir)
+	o.only = strings.TrimSpace(o.only)
+	if o.only != "" && o.only != "intake" {
+		return o, fmt.Errorf("--only 에는 intake 만 쓸 수 있습니다: %s", o.only)
+	}
 	return o, nil
 }
 
@@ -74,6 +81,7 @@ type launchPlan struct {
 	ports       []int  // ports to try in order; one entry when the port was given
 	envAddr     string // NOTEBOOK_ADDR when set and no --port: listen exactly there
 	openBrowser bool
+	only        string // "intake": 요청 접수함만
 }
 
 func (p launchPlan) addr(port int) string {
@@ -133,6 +141,10 @@ func makePlan(goos string, getenv func(string) string, o options) (launchPlan, e
 	}
 
 	p.openBrowser = p.desktop && !o.noBrowser && strings.TrimSpace(getenv("NOTEBOOK_NO_BROWSER")) == ""
+	p.only = o.only
+	if p.only == "" && strings.TrimSpace(getenv("NOTEBOOK_ONLY")) == "intake" {
+		p.only = "intake"
+	}
 	return p, nil
 }
 
@@ -239,10 +251,15 @@ func localURL(port int) string { return "http://localhost:" + strconv.Itoa(port)
 // printDesktopBanner tells a person at the console what is running and how to stop it.
 func printDesktopBanner(w io.Writer, p launchPlan, port int, ver string) {
 	fmt.Fprintln(w, "")
+	name := "관리 수첩"
+	if p.only == "intake" {
+		name = "요청 접수함(관리 수첩"
+		ver += ")"
+	}
 	if p.demo {
-		fmt.Fprintf(w, "  관리 수첩 %s — 체험 모드 (예시 데이터, 끄면 사라집니다)\n", ver)
+		fmt.Fprintf(w, "  %s %s — 체험 모드 (예시 데이터, 끄면 사라집니다)\n", name, ver)
 	} else {
-		fmt.Fprintf(w, "  관리 수첩 %s\n", ver)
+		fmt.Fprintf(w, "  %s %s\n", name, ver)
 	}
 	fmt.Fprintf(w, "  주소   %s   (브라우저가 열리지 않으면 이 주소를 여세요)\n", localURL(port))
 	if p.dataDir != "" {

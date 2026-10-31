@@ -639,3 +639,43 @@ test("tableWiki: 칸 안의 백슬래시가 열 구분자를 깨지 않는다", 
     assert.doesNotMatch(row, /\\\\/);
   });
 });
+
+/* ---------- 요청 접수함(한 기능판) ---------- */
+test("intakeView: 열린 것은 시계 넘김 → 오늘 기한 → 여유 → 시계 없음, 끝난 것은 done 보기에만", () => {
+  const c = K.cal("");
+  const now = D(2026, 11, 4, 15); // 수
+  const over = { id: "over", status: "접수", receivedAt: D(2026, 10, 29, 10).toISOString() };   // 목 → 월 10시 기한
+  const soon = { id: "soon", status: "접수", receivedAt: D(2026, 11, 2, 16).toISOString() };    // 월 16시 → 수 16시
+  const ok = { id: "ok", status: "정리 중", receivedAt: D(2026, 11, 4, 9).toISOString() };     // 수 → 금
+  const urgent = { id: "urg", status: "진행", urgent: true, receivedAt: D(2026, 11, 4, 8).toISOString() };
+  const fwd = { id: "fwd", status: "리드 전달", forwardedAt: D(2026, 11, 3).toISOString(), receivedAt: D(2026, 11, 1).toISOString() };
+  const done = { id: "done", status: "완료", receivedAt: D(2026, 11, 3).toISOString() };
+  const all = [done, ok, fwd, urgent, soon, over];
+  assert.deepEqual(K.intakeView(all, "open", now, c).map((r) => r.id), ["over", "soon", "ok", "urg", "fwd"]);
+  assert.deepEqual(K.intakeView(all, "done", now, c).map((r) => r.id), ["done"]);
+  assert.equal(K.intakeView(all, "all", now, c).length, 6);
+  assert.equal(K.intakeView(all, "all", now, c).slice(-1)[0].id, "done");
+  assert.deepEqual(K.intakeView([null, 3, "x"], "all", now, c), []);
+});
+
+test("intakeCounts: 열린 요청·기한 넘김·빈칸 있는 접수", () => {
+  const c = K.cal("");
+  const now = D(2026, 11, 4, 15);
+  const reqs = [
+    { status: "접수", receivedAt: D(2026, 10, 29, 10).toISOString(), what: "a" },                              // 넘김 + 빈칸
+    { status: "정리 중", receivedAt: D(2026, 11, 4, 9).toISOString(), what: "b", why: "w", when: "x", check: "y", program: "p" }, // 빈칸 없음
+    { status: "진행", urgent: true, receivedAt: D(2026, 11, 4, 8).toISOString() },                            // 긴급: 빈칸 셈에서 뺌
+    { status: "완료", receivedAt: D(2026, 10, 1).toISOString() },
+  ];
+  assert.deepEqual(K.intakeCounts(reqs, now, c), { open: 3, over: 1, blanks: 1 });
+});
+
+test("statusPatch: 리드 전달·끝남·보류 시각을 처음 한 번만 적고, 되돌리면 지운다", () => {
+  const now = "2026-11-04T06:00:00.000Z";
+  assert.deepEqual(K.statusPatch({ status: "정리 중" }, "리드 전달", now), { status: "리드 전달", forwardedAt: now });
+  assert.deepEqual(K.statusPatch({ status: "리드 전달", forwardedAt: "x" }, "리드 전달", now), { status: "리드 전달" });
+  assert.deepEqual(K.statusPatch({ status: "진행" }, "완료", now), { status: "완료", closedAt: now });
+  assert.deepEqual(K.statusPatch({ status: "완료", closedAt: "x" }, "진행", now), { status: "진행", closedAt: null });
+  assert.deepEqual(K.statusPatch({ status: "정리 중" }, "보류", now), { status: "보류", heldAt: now });
+  assert.deepEqual(K.statusPatch({ status: "보류", heldAt: "x" }, "정리 중", now), { status: "정리 중", heldAt: null });
+});

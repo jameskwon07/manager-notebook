@@ -456,7 +456,7 @@ fi
 
 # ---------------------------------------------------------------- 정적 파일
 step "정적 파일"
-for spec in "/|text/html" "/core.js|text/javascript" "/app.js|javascript" "/app.css|text/css" "/content.json|json" "/favicon.svg|image/svg+xml" "/login|text/html"; do
+for spec in "/|text/html" "/core.js|text/javascript" "/app.js|javascript" "/app.css|text/css" "/content.json|json" "/favicon.svg|image/svg+xml" "/intake|text/html" "/intake.js|javascript" "/intake.css|text/css" "/login|text/html"; do
   path=${spec%%|*}; ctype=${spec##*|}
   req GET "$path"
   if [[ $path == /login && $(status) =~ ^30[1237]$ ]]; then
@@ -467,6 +467,10 @@ for spec in "/|text/html" "/core.js|text/javascript" "/app.js|javascript" "/app.
   expect_status 200 "GET $path"
   expect "'$ctype' in h.get('content-type','')" "  Content-Type 에 '$ctype' ($(val "h.get('content-type','')"))"
   case $path in
+    /intake)
+      expect "'요청 접수함' in t" "  요청 접수함(한 기능판) 화면"
+      expect "(lambda ss: [x[0].lstrip('/').lstrip('./') for x in ss if x[0].lstrip('/').lstrip('./') in ('core.js','intake.js')] == ['core.js','intake.js'])(script_srcs(t))" "  intake.html 이 core.js → intake.js 순서로 불러옴"
+      ;;
     /content.json)
       expect "isinstance(d, dict) and all(k in d for k in ('app','intake','prompts'))" "  content.json 이 JSON 이고 2.0 기본 키(app·intake·prompts)가 있음"
       soft "(d.get('app') or {}).get('title_ko') == '관리 수첩 2'" "  app.title_ko = '관리 수첩 2'"
@@ -753,11 +757,11 @@ fi
 # --demo 는 메모리에 예시 데이터를 만들고 /data 볼륨을 건드리지 않아야 합니다.
 # 바로 뒤 '인증 + 데이터 유지'에서 같은 볼륨이 그대로인지(export 와 같은지) 다시 확인합니다.
 if [[ $MODE == docker ]]; then
-  step "체험 모드(--demo): 메모리의 예시 데이터, 볼륨은 그대로"
+  step "체험 모드(--demo --only intake): 메모리의 예시 데이터, 첫 화면은 요청 접수함, 볼륨은 그대로"
   APP_DEMO="$APP-demo"
   docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
   docker run -d --name "$APP_DEMO" --network none --read-only --cap-drop ALL \
-    --security-opt no-new-privileges:true -v "$VOL:/data" "$IMAGE" --demo >/dev/null
+    --security-opt no-new-privileges:true -v "$VOL:/data" "$IMAGE" --demo --only intake >/dev/null
   docker run -d --name "$APP_DEMO-curl" --network "container:$APP_DEMO" \
     --entrypoint sleep "$CURL_IMAGE" 1800 >/dev/null
   SAVED_HELPER=$HELPER
@@ -768,6 +772,10 @@ if [[ $MODE == docker ]]; then
     expect "d.get('demo') is True" "state.demo = true"
     expect "len(d.get('programs') or []) == 7 and len(d.get('requests') or []) == 7" "예시 프로그램 7개·요청 7건"
     expect "(d.get('settings') or {}).get('people') and len(d['settings']['people']) == 4" "예시 사람 4명(A~D)"
+    expect "d.get('only') == 'intake'" "--only intake 이면 state.only = intake"
+    req GET /
+    expect_status 200 "--only intake 의 첫 화면"
+    expect "'요청 접수함' in t" "  첫 화면이 요청 접수함"
   fi
   docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
   HELPER=$SAVED_HELPER

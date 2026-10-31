@@ -33,7 +33,7 @@ function Post-Json([string]$url, $obj) {
 }
 
 $data = Join-Path $work "data"
-$p1 = $null; $p3 = $null; $p4 = $null; $p5 = $null
+$p1 = $null; $p3 = $null; $p4 = $null; $p5 = $null; $p6 = $null
 try {
   # 1) 데이터 폴더와 포트를 정해서 실행
   $p1 = Start-Nb @("--no-browser", "--port", "18080", "--data", $data) "p1"
@@ -90,7 +90,16 @@ try {
   Stop-Nb $p5; $p5 = $null
   Check "체험 모드는 기본 데이터를 건드리지 않음" ((Get-Item $defDb).LastWriteTimeUtc -eq $before)
 
-  # 6) 버전 명령
+  # 6) 요청 접수함만(--only intake): 첫 화면이 요청 접수함
+  $p6 = Start-Nb @("--only", "intake", "--demo", "--no-browser", "--port", "18091") "p6"
+  Wait-Health 18091 | Out-Null
+  $home6 = Invoke-WebRequest "http://127.0.0.1:18091/" -UseBasicParsing
+  Check "요청 접수함 첫 화면" ($home6.Content -match "요청 접수함")
+  $st6 = Invoke-RestMethod "http://127.0.0.1:18091/api/state"
+  Check "state.only = intake" ($st6.only -eq "intake")
+  Stop-Nb $p6; $p6 = $null
+
+  # 7) 버전 명령
   $v = & $Exe version
   if ($Expected) { Check "version 명령" ($v.Trim() -eq $Expected) $v }
 }
@@ -99,7 +108,7 @@ catch {
   $script:fail++
 }
 finally {
-  Stop-Nb $p1; Stop-Nb $p3; Stop-Nb $p4; Stop-Nb $p5
+  Stop-Nb $p1; Stop-Nb $p3; Stop-Nb $p4; Stop-Nb $p5; Stop-Nb $p6
   Get-ChildItem $work -Filter *.txt -ErrorAction SilentlyContinue | ForEach-Object {
     if ($script:fail -gt 0) { Write-Host "---- $($_.Name)"; Get-Content $_.FullName -Encoding UTF8 | Select-Object -First 40 }
   }

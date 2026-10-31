@@ -193,3 +193,27 @@ func TestPrintDesktopBanner(t *testing.T) {
 		t.Errorf("demo banner:\n%s", b.String())
 	}
 }
+
+func TestOnlyIntake(t *testing.T) {
+	o, err := parseOptions([]string{"--only", "intake"})
+	if err != nil || o.only != "intake" {
+		t.Fatalf("--only intake: %+v %v", o, err)
+	}
+	if _, err := parseOptions([]string{"--only", "friday"}); err == nil {
+		t.Fatal("--only friday should fail")
+	}
+	p, _ := makePlan("windows", env(map[string]string{"LOCALAPPDATA": "L"}), o)
+	if p.only != "intake" {
+		t.Fatalf("plan only %q", p.only)
+	}
+	// The container turns it on with NOTEBOOK_ONLY.
+	p, _ = makePlan("linux", env(map[string]string{"NOTEBOOK_ADDR": ":8080", "NOTEBOOK_DATA_DIR": "/data", "NOTEBOOK_ONLY": "intake"}), options{})
+	if p.only != "intake" {
+		t.Fatalf("NOTEBOOK_ONLY: %q", p.only)
+	}
+	var b strings.Builder
+	printDesktopBanner(&b, launchPlan{desktop: true, dataDir: "D", only: "intake"}, 8080, "2.2.0")
+	if !strings.Contains(b.String(), "요청 접수함") {
+		t.Fatalf("banner: %s", b.String())
+	}
+}

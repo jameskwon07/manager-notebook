@@ -393,6 +393,42 @@
   }
 
   /* ---------- 복사 문장 ---------- */
+  /* ---------- 요청 접수함(한 기능판) ---------- */
+  /* 보기: open(열린 것) · all(전체) · done(끝난 것). 정렬: 열린 것은 시계 넘김 → 오늘 기한 → 여유 → 시계 없음,
+     같으면 최근 접수부터. 끝난 것은 맨 뒤. */
+  var INTAKE_RANK = { over: 0, soon: 1, ok: 2 };
+  function intakeRank(r, now, c) {
+    if (!isOpenReq(r)) return 4;
+    var k = reqClock(r, now, c);
+    return k && INTAKE_RANK.hasOwnProperty(k.state) ? INTAKE_RANK[k.state] : 3;
+  }
+  function intakeView(requests, filter, now, c) {
+    var list = arr(requests).filter(function (r) {
+      if (!r || typeof r !== "object") return false;
+      return filter === "all" ? true : filter === "done" ? !isOpenReq(r) : isOpenReq(r);
+    });
+    var ranked = list.map(function (r) { return { r: r, k: intakeRank(r, now, c), t: str(r.receivedAt || r.createdAt) }; });
+    ranked.sort(function (a, b) { return a.k - b.k || (a.t < b.t ? 1 : a.t > b.t ? -1 : 0); });
+    return ranked.map(function (x) { return x.r; });
+  }
+  /* 머리 숫자: 열린 요청, 전달 기한 넘김, 빈칸 있는 접수(접수·정리 중) */
+  function intakeCounts(requests, now, c) {
+    var open = arr(requests).filter(function (r) { return r && isOpenReq(r); });
+    var over = open.filter(function (r) { var k = reqClock(r, now, c); return k && k.state === "over"; }).length;
+    var blanks = open.filter(function (r) { return (r.status === "접수" || r.status === "정리 중" || !r.status) && !r.urgent && missing(r).length > 0; }).length;
+    return { open: open.length, over: over, blanks: blanks };
+  }
+  /* 상태를 바꿀 때 함께 적을 시각들(서버에 보낼 patch). now는 ISO 문자열. */
+  function statusPatch(cur, next, nowIso) {
+    cur = cur || {};
+    var p = { status: next }, closed = ["완료", "종료"];
+    if (next === "리드 전달" && !cur.forwardedAt) p.forwardedAt = nowIso;
+    if (closed.indexOf(next) >= 0 && !cur.closedAt) p.closedAt = nowIso;
+    if (closed.indexOf(next) < 0 && cur.closedAt) p.closedAt = null;
+    if (next === "보류" && cur.status !== "보류") p.heldAt = nowIso;
+    if (next !== "보류" && cur.heldAt) p.heldAt = null;
+    return p;
+  }
   function askText(req, programName) {
     req = req || {};
     var t = reqTitle(req), pn = trimS(programName), keys = MISSING_KEYS.filter(function (k) { return !trimS(req[k]); });
@@ -524,6 +560,7 @@
     weekId: weekId, cycleId: cycleId,
     signals: signals, todayActions: todayActions,
     askText: askText, handoffText: handoffText,
+    intakeView: intakeView, intakeCounts: intakeCounts, statusPatch: statusPatch,
     absorbedThisWeek: absorbedThisWeek, fridayCounts: fridayCounts, fridayDraft: fridayDraft,
     escHTML: escHTML, tableHTML: tableHTML, tableWiki: tableWiki,
     weekSum: weekSum

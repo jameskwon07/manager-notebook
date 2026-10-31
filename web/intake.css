@@ -1,0 +1,45 @@
+/* 요청 접수함(한 기능판). 색·글꼴 토큰과 버튼·알약·양식은 app.css 것을 그대로 씁니다. */
+.ib { max-width: 980px; padding-block: 20px 72px; }
+.ib-top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+.ib-brand { display: grid; gap: 4px; min-width: 0; flex: 1 1 360px; }
+.ib-brand h1 { font-size: var(--s3); }
+.ib-sub { color: var(--ink-soft); max-width: 64ch; }
+.ib-counts { display: flex; flex-wrap: wrap; gap: 8px; }
+.ib-count { display: grid; gap: 0; min-width: 92px; padding: 6px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); }
+.ib-count b { font-family: var(--f-mono); font-size: var(--s2); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.ib-count span { font-size: .78rem; color: var(--ink-soft); }
+.ib-count.crit { border-color: var(--bad); } .ib-count.crit b { color: var(--bad); }
+.ib-count.warn b { color: var(--warn); }
+
+.ib-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.ib-item { border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 0 8px 8px 0; padding: 10px 14px; display: grid; gap: 6px; background: var(--sheet); min-width: 0; }
+.ib-item.over { border-left-color: var(--bad); }
+.ib-item.soon { border-left-color: var(--warn); }
+.ib-item.ok { border-left-color: var(--good); }
+.ib-item.closed { opacity: .72; }
+.ib-row1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; min-width: 0; }
+.ib-what { font-weight: 700; font-size: var(--s1); overflow-wrap: anywhere; min-width: 0; }
+.ib-meta { overflow-wrap: anywhere; }
+.ib-raw { color: var(--ink-soft); font-size: var(--s-1); white-space: pre-wrap; overflow-wrap: anywhere; border-left: 2px solid var(--grid); padding-left: 8px; }
+.ib-gaps { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.ib-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ib-actions select { width: auto; font-size: var(--s-1); padding: 4px 8px; }
+.ib-edit { border-top: 1px dashed var(--rule); padding-top: 10px; display: grid; gap: 10px; }
+.ib-edit .say { max-height: 14em; overflow: auto; }
+
+.ib-settings > summary { cursor: pointer; font-weight: 700; }
+.ib-settings[open] > summary { margin-bottom: 4px; }
+.ib-set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 24px; align-items: start; }
+.ib-set-grid h3 { font-size: var(--s0); }
+.ib-set-grid textarea { min-width: 0; }
+#ib-prog-form input { flex: 1 1 160px; width: auto; }
+.ib-progs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ib-progs li { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.ib-progs li input { flex: 1 1 auto; }
+.ib-progs li .ex { white-space: nowrap; }
+#ib-import-file { max-width: 100%; font-size: var(--s-1); }
+
+@media (max-width: 560px) {
+  .ib-count { min-width: 0; flex: 1 1 30%; }
+  .ib-actions .btn { white-space: normal; }
+}

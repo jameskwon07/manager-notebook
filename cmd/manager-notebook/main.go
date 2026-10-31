@@ -164,6 +164,7 @@ func run(o options) error {
 		Guide:    g,
 		Web:      web,
 		Demo:     plan.demo,
+		Only:     plan.only,
 	})
 	if srv.AuthEnabled() {
 		log.Printf("로그인 켜짐 (NOTEBOOK_PASSWORD 있음)")
