@@ -222,7 +222,8 @@
         sel.addEventListener("change", function () { putSettings({ askUrl: sel.value }).then(function () { toast("창구 주소를 저장했습니다."); }); });
       }
       var open = h("a", { cls: "btn sm", href: base, target: "_blank", rel: "noopener", text: "요청자 화면 열어 보기" });
-      if (typeof window.NBD_openDoor === "function") open.addEventListener("click", function (e) { e.preventDefault(); window.NBD_openDoor(); });
+      /* 웹 체험판은 요청자 화면이 같은 페이지에 있어 그쪽으로 바꿉니다(NBD_openDoor). */
+      open.addEventListener("click", function (e) { if (typeof window.NBD_openDoor === "function") { e.preventDefault(); window.NBD_openDoor(); } });
       body.replaceChildren.apply(body, [
         h("p", { text: "요청자에게 이 링크를 주세요. 요청자가 7칸을 직접 적어 보내면 아래 '받은 요청'에 바로 들어옵니다." }),
         h("div", { cls: "ib-link row" }, h("span", { cls: "mono", text: base }),
@@ -420,6 +421,8 @@
     if (S.auth) foot.push(h("span", null, " · ", h("button", { cls: "btn quiet sm", type: "button", text: "로그아웃", onclick: function () { api("POST", "/api/logout").then(goLogin, goLogin); } })));
     $("ib-foot").replaceChildren.apply($("ib-foot"), foot);
   }
+  /* 다른 탭에 있다가 돌아오면 바로 새로 읽습니다. */
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && S.loaded && !S.open) refresh(); });
   /* 창구로 들어온 요청과 근무일 시계를 30초마다 새로 읽어 그립니다. 고치거나 적는 중에는 건드리지 않습니다. */
   setInterval(function () {
     if (!S.loaded || S.open || document.hidden) return;

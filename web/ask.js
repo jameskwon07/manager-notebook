@@ -35,7 +35,8 @@
   function clean(v) { return K.stripNames(v).text; }
   function load(key, dflt) { try { var v = localStorage.getItem(key); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; } }
   function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* 저장이 막힌 브라우저: 목록만 못 남김 */ } }
-  function linkOf(code) { return location.origin + "/r/" + code; }
+  /* NBD_DOOR: 웹 체험판이 보여 줄 예시 창구 주소(실제 창구에서는 없음) */
+  function linkOf(code) { return (typeof window.NBD_DOOR === "string" && window.NBD_DOOR ? window.NBD_DOOR.replace(/\/+$/, "") : location.origin) + "/r/" + code; }
 
   var toastTimer = null;
   function toast(msg) { var el = $("toast"); el.textContent = msg; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.hidden = true; }, 3600); }
@@ -190,6 +191,13 @@
     if (m && !window.NBD_ONLY) { S.code = m[1]; show(m[1]); } else home();
   }
   window.addEventListener("popstate", route);
+  /* 다른 탭에 있다가 돌아오면 보고 있던 요청을 새로 읽습니다(빈칸을 적는 중이면 그대로 둠). */
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden || !S.code || S.busy || $("ask-view").hidden) return;
+    var a = document.activeElement;
+    if (a && $("ask-view").contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    show(S.code);
+  });
 
   /* ---------- 이 브라우저에서 보낸 요청 ---------- */
   function renderMine() {
