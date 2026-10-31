@@ -169,7 +169,7 @@
     raw: {}, settings: {}, llm: { enabled: false, model: "" }, version: "", auth: false, loaded: false, ready: false,
     drafts: {}, openReq: null, openProg: null, openRisk: null, reqFilter: "open", noteFilter: "week", showClosedBlk: false, showDoneMap: false,
     blkKind: "b", boundsEdit: null, friInit: false, friDirty: false, friUndo: null, friCtl: null, askPolished: {}, imp: null, guideSlug: null,
-    seeding: false, pointer: 0, pending: false, aiOff: false, fRecvTouched: false
+    seeding: false, pointer: 0, pending: false, aiOff: false, fRecvTouched: false, ask: { on: false, urls: [] }
   };
   COLLS.forEach(function (c) { S[c] = []; });
   function withDefaults(raw) { return safe("withDefaults", function () { return K.withDefaults(raw || {}, C); }, Object.assign({ startDate: K.DEFAULT_START, cycleStartWeek: 2, cycleWeeks: 6, cooldownWeeks: 1, holidays: K.HOLIDAYS_DEFAULT, people: [{ id: "p1", label: "A", leadCap: 2 }, { id: "p2", label: "B", leadCap: 2 }, { id: "p3", label: "C", leadCap: 2 }, { id: "p4", label: "D", leadCap: 2 }], slotCap: 2, requesterRoles: ["다른 파트 개발자", "과제 PM", "다른 파트", "팀장 지시", "운영 담당", "기타"], urgentCriteria: [], bounds: null }, raw || {})); }
@@ -251,6 +251,7 @@
     S.llm = st.llm && typeof st.llm === "object" ? st.llm : { enabled: false, model: "" };
     if (st.version) S.version = String(st.version);
     S.auth = st.auth === true;
+    S.ask = st.ask && st.ask.on === true ? { on: true, port: st.ask.port || 0, urls: (Array.isArray(st.ask.urls) ? st.ask.urls : []).filter(function (u) { return typeof u === "string" && u; }) } : { on: false, urls: [] };
     var band = $("demo-band"); if (band) band.hidden = st.demo !== true;
     S.loaded = true;
     storeNote(""); setReady(true);
@@ -738,8 +739,26 @@
   }
   function reqField(r, k) { return function (v) { var p = {}; p[k] = typeof v === "string" ? clean(v) : v; return upd("requests", r.id, p); }; }
   function statusOpts() { var s = t("intake.statuses", STATUSES); return (s.length === 7 ? s : STATUSES).map(function (x) { return [x, x]; }); }
+  /* 요청 창구(--share): 요청자가 7칸을 직접 적어 보내는 링크. 닫혀 있으면 "". */
+  function doorBase() { return S.ask.on ? (String(S.settings.askUrl || "").trim() || S.ask.urls[0] || "") : ""; }
+  function renderDoor() {
+    var box = $("intake-door"), base = doorBase();
+    if (!box) return;
+    var tplBtn = h("button", { cls: "btn sm", type: "button", onclick: function () { copyText(K.templateText(), null, "양식을 복사했습니다."); } }, "양식 복사");
+    if (base) {
+      box.replaceChildren(h("p", null, h("b", { text: "요청 창구 " }), h("span", { cls: "mono", text: base })),
+        h("p", { cls: "ex", text: "요청자에게 이 링크를 주면 7칸을 직접 적어 보내고, 이 표에 바로 들어옵니다. 메신저로 온 요청에는 옮겨 적지 말고 링크 안내 문장으로 답하세요." }),
+        h("div", { cls: "row" }, h("button", { cls: "btn sm primary", type: "button", onclick: function () { copyText(K.inviteText(base), null, "링크 안내 문장을 복사했습니다."); } }, "링크 안내 문장 복사"), tplBtn));
+    } else if (S.ask.on) {
+      box.replaceChildren(h("p", { text: "요청 창구는 열렸지만(" + (S.ask.port || "?") + " 포트) 이 PC의 주소를 모릅니다. 요청 접수함(/intake) 화면의 '설정 · 요청 창구 주소'에 http://PC주소:" + (S.ask.port || 8180) + "/ 을 적어 주세요." }), h("div", { cls: "row" }, tplBtn));
+    } else {
+      box.replaceChildren(h("p", { text: "요청 창구가 닫혀 있습니다. --share 로 실행하면(또는 Docker에 NOTEBOOK_ASK_ADDR=:8180) 요청자가 링크로 7칸을 직접 적어 보냅니다." }),
+        h("div", { cls: "row" }, tplBtn, h("span", { cls: "ex", text: "창구 없이 받을 때: 요청자에게 양식을 보내고, 채워 온 글은 '원문' 칸에 붙여 넣으세요." })));
+    }
+  }
   function renderIntake() {
     var now = new Date(), k = counts(now);
+    renderDoor();
     var sz = { S: 0, M: 0, L: 0 }; k.open.forEach(function (r) { if (has(sz, r.size)) sz[r.size]++; });
     var urg = k.open.filter(function (r) { return r.urgent; }).length;
     $("intake-tiles").replaceChildren(
@@ -753,7 +772,8 @@
     list.forEach(function (r) {
       var miss = missingOf(r), open = S.openReq === r.id;
       var what = h("td", null, h("div", { cls: "what", text: r.what || "(무엇 칸 비어 있음)" }),
-        h("div", { cls: "pills" }, r.urgent ? pill("on", "긴급") : null, r.absorbed ? pill("warn", "흡수") : null, r.askedAt ? pill("info", "되물음 " + fmtDay(r.askedAt)) : null),
+        h("div", { cls: "pills" }, r.urgent ? pill("on", "긴급") : null, r.via === "창구" ? pill("on", "창구") : null, r.absorbed ? pill("warn", "흡수") : null,
+          r.addedAt && (!r.askedAt || r.addedAt > r.askedAt) ? pill("good", "요청자가 보탬 " + fmtDay(r.addedAt)) : r.askedAt ? pill("info", "되물음 " + fmtDay(r.askedAt)) : null),
         r.raw && r.raw !== r.what ? h("div", { cls: "raw", text: r.raw }) : null);
       body.append(h("tr", { cls: open ? "open" : (isOpenR(r) ? "" : "dim") }, what,
         h("td", { cls: "mid", text: r.from || "—" }), h("td", { cls: "mid", text: progName(r.program) }),
@@ -801,7 +821,7 @@
       lab("wide", "note", "메모", txt(k("note"), r.note, reqField(r, "note"), { rows: "2", placeholder: FP("note") }, "textarea")),
       h("p", { cls: "wide ex", text: "칸을 고치고 다른 칸으로 옮기면 바로 저장됩니다." }));
     var pname = r.program ? progName(r.program) : "";
-    var askT = S.askPolished[id] || safe("askText", function () { return K.askText(r, pname); }, "");
+    var askT = S.askPolished[id] || safe("askText", function () { return K.askText(r, pname, doorBase() && r.askCode ? K.askLink(doorBase(), r.askCode) : ""); }, "");
     var handT = safe("handoffText", function () { return K.handoffText(r, pname); }, "");
     var askBox = h("div", { cls: "say", text: miss.length ? askT : "빈칸이 없습니다. 되물을 것이 없습니다." });
     var handBox = h("div", { cls: "say", text: handT });
@@ -834,6 +854,17 @@
   ["open", "all", "done"].forEach(function (f) { $("rf-" + f).addEventListener("click", function () { S.reqFilter = f; render(); }); });
   $("f-recv").addEventListener("input", function () { S.fRecvTouched = true; });
   $("f-size").addEventListener("change", function () { $("f-size-hint").textContent = sizeHint($("f-size").value); });
+  /* 요청자가 채워 보낸 양식을 원문 칸에 붙여 넣으면 칸이 저절로 나뉩니다(양식이 아니면 그대로 둠). */
+  $("f-raw").addEventListener("paste", function () {
+    setTimeout(function () {
+      var f = K.parseAskTemplate($("f-raw").value, S.programs);
+      if (!f.labeled) return;
+      $("f-raw").value = f.raw; $("f-what").value = f.what;
+      ["why", "when", "check"].forEach(function (k) { $("f-" + k).value = f[k]; });
+      if (f.program) $("f-prog").value = f.program;
+      toast("양식을 칸으로 나눴습니다. 확인한 뒤 [접수함에 적기]를 누르세요.");
+    }, 0);
+  });
   $("req-form").addEventListener("submit", function (e) {
     e.preventDefault();
     if (!S.ready) return;

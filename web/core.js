@@ -429,14 +429,16 @@
     if (next !== "보류" && cur.heldAt) p.heldAt = null;
     return p;
   }
-  function askText(req, programName) {
+  /* link: 요청 창구가 열려 있으면 요청자가 빈칸을 직접 채울 링크(없으면 메신저로 답을 받음) */
+  function askText(req, programName, link) {
     req = req || {};
     var t = reqTitle(req), pn = trimS(programName), keys = MISSING_KEYS.filter(function (k) { return !trimS(req[k]); });
+    link = trimS(link);
     var head = "안녕하세요. \"" + t + "\"" + (pn && pn !== "미정" ? " (" + pn + ")" : "") + " 요청을 접수했습니다.";
-    if (!keys.length) return head + "\n빈칸이 없어 담당 리드에게 넘깁니다. 리드 추정을 받은 뒤 근무일 2일 안에 회신드리겠습니다.";
+    if (!keys.length) return head + "\n빈칸이 없어 담당 리드에게 넘깁니다. 리드 추정을 받은 뒤 근무일 2일 안에 회신드리겠습니다." + (link ? "\n진행 상황은 이 링크에서 보실 수 있습니다: " + link : "");
     return [head, "담당 리드에게 넘기기 전에 " + keys.length + "가지만 여쭙니다."]
       .concat(keys.map(function (k, i) { return (i + 1) + ") " + MISSING_ASK[k]; }))
-      .concat(["답을 주시면 리드 추정을 받은 뒤 근무일 2일 안에 회신드리겠습니다."]).join("\n");
+      .concat([link ? "이 링크에서 바로 채워 주시면 됩니다(진행 상황도 여기서 보입니다): " + link : "답을 주시면 리드 추정을 받은 뒤 근무일 2일 안에 회신드리겠습니다."]).join("\n");
   }
   function handoffText(req, programName) {
     req = req || {};
@@ -459,6 +461,97 @@
     if (raw) lines.push("요청 원문: " + raw);
     lines.push("다른 프로그램에 걸치면 그쪽 리드도 함께 봐 주세요. 요청자에게 날짜는 리드 추정 뒤에만 말합니다.");
     return lines.join("\n");
+  }
+
+  /* ---------- 요청 창구: 요청자가 직접 적습니다 ---------- */
+  var ASK_CODE_CHARS = "23456789abcdefghjkmnpqrstuvwxyz";
+  var ASK_CODE_RE = /^[23456789abcdefghjkmnpqrstuvwxyz]{10}$/;
+  /* 요청자 링크 코드(서버와 같은 글자·길이). bytes: 난수 10개(crypto.getRandomValues). */
+  function askCodeFrom(bytes) {
+    var out = "";
+    for (var i = 0; i < 10; i++) out += ASK_CODE_CHARS.charAt((Number(bytes && bytes[i]) || 0) % ASK_CODE_CHARS.length);
+    return out;
+  }
+  function askLink(base, code) { base = trimS(base); if (!base || !code) return ""; return base.replace(/\/+$/, "") + "/r/" + code; }
+  /* 메신저·메일로 요청이 왔을 때 옮겨 적지 않고 보낼 답 */
+  function inviteText(url) {
+    return "요청은 아래 링크에 한 번만 직접 적어 주세요. 담당 리드에게 넘길 때 필요한 칸(왜·언제까지·확인 방법)이 함께 있어 되묻는 일이 줄어듭니다. 보내시면 진행 상황도 그 링크에서 보실 수 있습니다.\n" + trimS(url);
+  }
+  function statusLinkText(req, link) { return "\"" + reqTitle(req) + "\" 요청의 진행 상황은 이 링크에서 보실 수 있습니다: " + trimS(link); }
+  /* 창구를 열 수 없을 때: 요청자가 메신저에서 채워 보낼 양식. 받은 글은 parseAskTemplate로 칸이 나뉩니다. */
+  var TEMPLATE_LINES = ["무엇(한 줄): ", "왜 필요하고 누가 정했나요: ", "언제까지, 그 날짜인 이유: ", "끝났다는 확인 방법: ", "어느 프로그램: ", "보내는 분: ", "자세히: "];
+  function askTemplate() { return ["[요청]"].concat(TEMPLATE_LINES).join("\n"); }
+  var TEMPLATE_INTRO = "아래 양식을 채워 보내 주세요. 모르는 칸은 비워 두셔도 됩니다.";
+  function templateText() { return TEMPLATE_INTRO + "\n" + askTemplate(); }
+  var LABEL_KEYS = [
+    ["when", /언제|기한|마감|까지/], ["check", /확인|완료\s*기준|끝났/], ["from", /보내는|보낸|요청자|요청한\s*분|작성자/],
+    ["program", /프로그램|시스템/], ["why", /왜|이유|배경|결정|정했/], ["what", /무엇|제목|요청\s*사항|할\s*일|^요청$/],
+    ["raw", /자세히|내용|설명|기타|참고|메모/]
+  ];
+  var BLANK_ANSWER = /^(?:[-–—?]+|모름|미정|(?:잘\s*)?모르겠(?:음|어요|습니다)?)$/;
+  function labelKey(label) {
+    label = trimS(label);
+    if (!label || label.length > 24 || /https?/i.test(label)) return "";
+    for (var i = 0; i < LABEL_KEYS.length; i++) if (LABEL_KEYS[i][1].test(label)) return LABEL_KEYS[i][0];
+    return "";
+  }
+  function normName(s) { return str(s).toLowerCase().replace(/[\s·_\-()[\]]+/g, ""); }
+  function matchProgram(programs, text) {
+    var t = normName(text);
+    if (!t) return "";
+    var list = arr(programs).filter(function (p) { return p && p.id && p.active !== false && normName(p.name); });
+    for (var i = 0; i < list.length; i++) if (normName(list[i].name) === t) return list[i].id;
+    var part = list.filter(function (p) { var n = normName(p.name); return t.length >= 2 && (n.indexOf(t) >= 0 || t.indexOf(n) >= 0); });
+    return part.length === 1 ? part[0].id : "";
+  }
+  /* 요청자가 채워 보낸 양식(또는 아무 글)을 칸으로 나눕니다. 양식이 아니면 첫 줄이 '무엇', 전체가 '자세히'. */
+  function parseAskTemplate(text, programs) {
+    var src = str(text).replace(/\r\n?/g, "\n");
+    var out = { what: "", why: "", when: "", check: "", from: "", program: "", raw: "", labeled: 0 };
+    var cur = "", pre = [], vals = { what: [], why: [], when: [], check: [], from: [], program: [], raw: [] };
+    src.split("\n").forEach(function (line) {
+      var m = /^\s*(?:[-*•·]\s*)?([^:：\n]{1,24}?)\s*[:：]\s*(.*)$/.exec(line), k = m ? labelKey(m[1]) : "";
+      if (k) { cur = k; out.labeled++; if (trimS(m[2])) vals[k].push(m[2].trim()); return; }
+      if (!cur && (/^\s*\[[^\]]{0,12}\]\s*$/.test(line) || trimS(line) === TEMPLATE_INTRO)) return;
+      if (!trimS(line)) { if (cur === "raw") vals.raw.push(""); return; }
+      if (cur) vals[cur].push(line.trim()); else pre.push(line.trim());
+    });
+    if (!out.labeled) {
+      var all = trimS(src);
+      var first = cleanLine(all.split("\n")[0] || "");
+      out.what = first.length > 60 ? first.slice(0, 59) + "…" : first;
+      out.raw = all;
+      return out;
+    }
+    ["what", "why", "when", "check", "from", "program"].forEach(function (k) {
+      var v = trimS(vals[k].join(" "));
+      out[k] = BLANK_ANSWER.test(v) ? "" : v;
+    });
+    var raw = trimS(vals.raw.join("\n").replace(/\n{3,}/g, "\n\n"));
+    if (BLANK_ANSWER.test(raw)) raw = "";
+    if (pre.length) raw = trimS(pre.join("\n") + (raw ? "\n" + raw : ""));
+    if (out.program) {
+      var id = matchProgram(programs, out.program);
+      if (!id) raw = trimS(raw + (raw ? "\n" : "") + "어느 프로그램(요청자가 적은 것): " + out.program);
+      out.program = id;
+    }
+    if (out.what.length > 120) out.what = out.what.slice(0, 119) + "…";
+    if (!out.what) { var f = cleanLine(raw.split("\n")[0] || ""); out.what = f.length > 60 ? f.slice(0, 59) + "…" : f; }
+    out.raw = raw;
+    return out;
+  }
+  /* 요청자 화면에 보일 단계 */
+  var ASK_STEPS = ["받음", "확인 중", "리드에게 넘김", "작업 중", "끝남"];
+  function askStage(status) {
+    switch (status) {
+      case "정리 중": return { step: 1, label: "확인 중", note: "담당자가 빈칸을 확인하고 있습니다. 아래 빈칸을 채워 주시면 바로 넘어갑니다." };
+      case "리드 전달": return { step: 2, label: "리드에게 넘김", note: "담당 리드가 작업량을 가늠하고 있습니다. 날짜는 그 뒤에 알려 드립니다." };
+      case "진행": return { step: 3, label: "작업 중", note: "작업하고 있습니다." };
+      case "완료": return { step: 4, label: "끝남", note: "끝났습니다. 확인해 보시고 다르면 담당자에게 알려 주세요." };
+      case "보류": return { step: -1, label: "잠시 멈춤", note: "잠시 멈춰 두었습니다. 자세한 사정은 담당자에게 물어봐 주세요." };
+      case "종료": return { step: -1, label: "닫음", note: "이 요청은 닫았습니다. 다시 필요하면 새로 보내 주세요." };
+      default: return { step: 0, label: "받음", note: "받았습니다. 근무일 2일 안에 담당 리드에게 넘깁니다." };
+    }
   }
 
   /* ---------- 금요일: 주간 서면 보고 초안 ---------- */
@@ -560,6 +653,8 @@
     weekId: weekId, cycleId: cycleId,
     signals: signals, todayActions: todayActions,
     askText: askText, handoffText: handoffText,
+    ASK_CODE_RE: ASK_CODE_RE, ASK_STEPS: ASK_STEPS, askCodeFrom: askCodeFrom, askLink: askLink, inviteText: inviteText, statusLinkText: statusLinkText,
+    askTemplate: askTemplate, templateText: templateText, parseAskTemplate: parseAskTemplate, matchProgram: matchProgram, askStage: askStage,
     intakeView: intakeView, intakeCounts: intakeCounts, statusPatch: statusPatch,
     absorbedThisWeek: absorbedThisWeek, fridayCounts: fridayCounts, fridayDraft: fridayDraft,
     escHTML: escHTML, tableHTML: tableHTML, tableWiki: tableWiki,

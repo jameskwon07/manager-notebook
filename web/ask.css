@@ -1,0 +1,35 @@
+/* 요청 창구(요청자 화면). 색·글꼴 토큰과 버튼·알약·양식은 app.css 것을 그대로 씁니다. */
+.ask { max-width: 760px; padding-block: 24px 72px; }
+.ask-top { display: grid; gap: 4px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+.ask-top h1 { font-size: var(--s3); }
+.ask-sub { color: var(--ink-soft); max-width: 64ch; }
+.ask-req { font-size: .72rem; font-weight: 600; color: var(--bad); margin-left: 4px; }
+.ask-form .row .ex { flex: 1 1 220px; }
+
+.ask-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; counter-reset: step; }
+.ask-steps li { counter-increment: step; font-size: var(--s-1); color: var(--ink-soft); border-top: 4px solid var(--grid); padding-top: 6px; overflow-wrap: anywhere; }
+.ask-steps li::before { content: counter(step) ". "; font-family: var(--f-mono); }
+.ask-steps li.done { border-top-color: var(--accent); }
+.ask-steps li.now { border-top-color: var(--accent); color: var(--ink); font-weight: 700; }
+.ask-stop { margin: 0; }
+
+.ask-link { padding: 8px 10px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; }
+.ask-link .mono { flex: 1 1 240px; overflow-wrap: anywhere; min-width: 0; }
+.ask-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
+.ask-dl dt { color: var(--ink-soft); font-size: var(--s-1); }
+.ask-dl dd { margin: 0; overflow-wrap: anywhere; }
+.ask-raw > div { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 2px solid var(--grid); padding-left: 8px; font-size: var(--s-1); }
+.ask-fill { border-top: 1px dashed var(--rule); padding-top: 12px; }
+
+.ask-mine { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ask-mine li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; min-width: 0; }
+.ask-mine li a { overflow-wrap: anywhere; min-width: 0; }
+.ask-mine li.now a { font-weight: 700; }
+
+@media (max-width: 560px) {
+  .ask-steps { grid-template-columns: 1fr; gap: 2px; }
+  .ask-steps li { border-top: 0; border-left: 4px solid var(--grid); padding: 2px 0 2px 8px; }
+  .ask-steps li.done, .ask-steps li.now { border-left-color: var(--accent); }
+  .ask-dl { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .ask-dl dd { margin-bottom: 6px; }
+}

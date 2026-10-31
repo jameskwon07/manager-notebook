@@ -679,3 +679,74 @@ test("statusPatch: 리드 전달·끝남·보류 시각을 처음 한 번만 적
   assert.deepEqual(K.statusPatch({ status: "정리 중" }, "보류", now), { status: "보류", heldAt: now });
   assert.deepEqual(K.statusPatch({ status: "보류", heldAt: "x" }, "정리 중", now), { status: "정리 중", heldAt: null });
 });
+
+test("parseAskTemplate: 요청자가 채워 보낸 양식을 칸으로 나눈다", () => {
+  const ps = [{ id: "p1", name: "주문 처리 서비스" }, { id: "p2", name: "로그 수집기" }, { id: "p3", name: "쉬는 것", active: false }];
+  const filled = K.templateText()
+    .replace("무엇(한 줄): ", "무엇(한 줄): 로그 내보내기 버튼")
+    .replace("왜 필요하고 누가 정했나요: ", "왜 필요하고 누가 정했나요: -")
+    .replace("언제까지, 그 날짜인 이유: ", "언제까지, 그 날짜인 이유: 11/20, 시연")
+    .replace("어느 프로그램: ", "어느 프로그램: 로그수집기")
+    .replace("보내는 분: ", "보내는 분: 다른 파트 개발자")
+    .replace("자세히: ", "자세히: 첫 줄\n둘째 줄\n\n셋째 줄");
+  assert.deepEqual(K.parseAskTemplate(filled, ps), {
+    what: "로그 내보내기 버튼", why: "", when: "11/20, 시연", check: "", from: "다른 파트 개발자", program: "p2",
+    raw: "첫 줄\n둘째 줄\n\n셋째 줄", labeled: 7,
+  });
+  // 손으로 쓴 양식: 글머리·전각 콜론·여러 줄 값, 모르는 프로그램 이름은 자세히에 남긴다
+  const hand = "안녕하세요\n- 무엇 ： 배포 스크립트 고치기\n- 기한: 금요일\n  (점검 일정 때문)\n- 확인: 점검 때 한 번에 배포\n- 시스템: 새 시스템\n- 쉬는 것";
+  const r = K.parseAskTemplate(hand, ps);
+  assert.equal(r.what, "배포 스크립트 고치기");
+  assert.equal(r.when, "금요일 (점검 일정 때문)");
+  assert.equal(r.check, "점검 때 한 번에 배포");
+  assert.equal(r.program, "");
+  assert.match(r.raw, /^안녕하세요\n/);
+  assert.match(r.raw, /어느 프로그램\(요청자가 적은 것\): 새 시스템/);
+  // 양식이 아니면 첫 줄이 '무엇', 전체가 '자세히'
+  assert.deepEqual(K.parseAskTemplate("10:30 회의 전에\n로그 버튼 좀 만들어 주세요", ps), {
+    what: "10:30 회의 전에", why: "", when: "", check: "", from: "", program: "", raw: "10:30 회의 전에\n로그 버튼 좀 만들어 주세요", labeled: 0,
+  });
+  assert.equal(K.parseAskTemplate("", ps).what, "");
+});
+
+test("matchProgram: 같은 이름, 띄어쓰기 무시, 하나만 겹칠 때만", () => {
+  const ps = [{ id: "a", name: "주문 처리 서비스" }, { id: "b", name: "주문 화면" }, { id: "c", name: "쉬는 것", active: false }];
+  assert.equal(K.matchProgram(ps, "주문처리서비스"), "a");
+  assert.equal(K.matchProgram(ps, "처리 서비스"), "a");
+  assert.equal(K.matchProgram(ps, "주문"), "");
+  assert.equal(K.matchProgram(ps, "쉬는 것"), "");
+  assert.equal(K.matchProgram(ps, ""), "");
+});
+
+test("요청 창구 문장: 되묻기에 링크, 링크 안내, 진행 링크", () => {
+  const link = K.askLink("http://10.0.0.5:8180/", "abcdefghjk");
+  assert.equal(link, "http://10.0.0.5:8180/r/abcdefghjk");
+  assert.equal(K.askLink("", "abcdefghjk"), "");
+  const ask = K.askText({ what: "버튼", why: "w" }, "로그 수집기", link);
+  assert.match(ask, /3가지만 여쭙니다/);
+  assert.ok(ask.endsWith("이 링크에서 바로 채워 주시면 됩니다(진행 상황도 여기서 보입니다): " + link));
+  assert.ok(!K.askText({ what: "버튼" }, "").includes("링크"));
+  const full = K.askText({ what: "버튼", why: "w", when: "x", check: "y", program: "p" }, "로그 수집기", link);
+  assert.ok(full.endsWith("진행 상황은 이 링크에서 보실 수 있습니다: " + link));
+  assert.ok(K.inviteText("http://10.0.0.5:8180/").endsWith("\nhttp://10.0.0.5:8180/"));
+  assert.equal(K.statusLinkText({ what: "버튼" }, link), "\"버튼\" 요청의 진행 상황은 이 링크에서 보실 수 있습니다: " + link);
+});
+
+test("askCodeFrom: 서버와 같은 글자 10개", () => {
+  const c = K.askCodeFrom([0, 1, 30, 31, 255, 7, 8, 9, 10, 11]);
+  assert.ok(K.ASK_CODE_RE.test(c), c);
+  assert.equal(c.length, 10);
+  assert.equal(c.slice(0, 4), "23z2"); // 0→2, 1→3, 30→z, 31→2(31로 나눈 나머지)
+  assert.ok(!K.ASK_CODE_RE.test("abcdefghj"));
+  assert.ok(!K.ASK_CODE_RE.test("abcdefghj0"));
+});
+
+test("askStage: 요청자에게 보이는 단계", () => {
+  assert.equal(K.askStage("접수").step, 0);
+  assert.equal(K.askStage(undefined).label, "받음");
+  assert.equal(K.askStage("정리 중").step, 1);
+  assert.equal(K.askStage("리드 전달").label, "리드에게 넘김");
+  assert.equal(K.askStage("완료").step, 4);
+  assert.equal(K.askStage("보류").step, -1);
+  assert.equal(K.ASK_STEPS.length, 5);
+});

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>요청 보내기</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/ask.css">
+<script src="/core.js" defer></script>
+<script src="/ask.js" defer></script>
+</head>
+<body>
+<!-- 요청 창구: 요청자가 직접 적어 보내는 화면. 이 포트에는 이 화면과 '내 요청 보기'만 있습니다. -->
+<div class="app ask" id="ask-app">
+  <header class="ask-top">
+    <h1>요청 보내기</h1>
+    <p class="ask-sub">적어 주신 그대로 담당자의 접수함에 들어갑니다. 보내면 받는 링크로 진행 상황을 보고, 빈칸을 나중에 채울 수 있습니다.</p>
+  </header>
+
+  <div class="callout warn" id="ask-demo" hidden><b>체험 모드</b> 예시 화면입니다. 보낸 요청은 담당자가 프로그램을 끄면 사라집니다.</div>
+  <div class="callout crit" id="ask-note" role="status" hidden></div>
+
+  <section class="card" id="ask-new" aria-labelledby="ask-new-h">
+    <h2 id="ask-new-h">새 요청</h2>
+    <form id="ask-form" class="form ask-form" novalidate>
+      <label class="wide" for="ask-what"><span>무엇이 필요하신가요? <b class="ask-req">필수</b></span><input type="text" id="ask-what" maxlength="120" autocomplete="off" placeholder="한 줄로 (예: 로그 화면에 내보내기 버튼 추가)"></label>
+      <label class="wide" for="ask-raw"><span>자세히 (선택)</span><textarea id="ask-raw" rows="3" maxlength="4000" placeholder="화면 위치, 참고할 문서, 이미 해 본 것 등"></textarea></label>
+      <label for="ask-why"><span>왜 필요한가요? 누가 정한 일인가요?</span><input type="text" id="ask-why" maxlength="500" autocomplete="off" placeholder="예: 다음 달 시연용, 팀장 지시"></label>
+      <label for="ask-when"><span>언제까지 필요한가요? 그 날짜인 이유는?</span><input type="text" id="ask-when" maxlength="500" autocomplete="off" placeholder="예: 11/20까지, 리허설이 11/21"></label>
+      <label for="ask-check"><span>끝났다는 것을 어떻게 확인하면 될까요?</span><input type="text" id="ask-check" maxlength="500" autocomplete="off" placeholder="예: 버튼을 누르면 파일이 받아짐"></label>
+      <label for="ask-prog"><span>어느 프로그램(시스템)인가요?</span><select id="ask-prog"><option value="">잘 모르겠음</option></select></label>
+      <label for="ask-from"><span>보내는 분 <b class="ask-req">필수</b></span><input type="text" id="ask-from" maxlength="60" autocomplete="off" placeholder="이름·소속 (예: 홍길동 · 다른 파트)"></label>
+      <div class="wide row"><button class="btn primary" type="submit" id="ask-send">보내기</button><span class="ex">모르는 칸은 비워도 됩니다. 비운 칸은 담당자가 다시 여쭙니다.</span></div>
+      <p class="wide ex">사람 이름(예: ○○ 책임님)은 [팀원]으로 바꿔 저장합니다. 누가 정했는지는 '팀장 지시'처럼 역할로 적어 주세요. 보내는 분 칸은 그대로 둡니다.</p>
+    </form>
+  </section>
+
+  <section class="card" id="ask-view" hidden aria-live="polite"></section>
+
+  <section class="card" id="ask-mine" hidden aria-labelledby="ask-mine-h">
+    <h2 id="ask-mine-h">이 브라우저에서 보낸 요청</h2>
+    <ul class="ask-mine" id="ask-mine-list"></ul>
+    <p class="ex">이 목록은 이 브라우저에만 남습니다. 다른 PC에서는 받은 링크로 보세요.</p>
+  </section>
+
+  <footer class="foot ex" id="ask-foot"></footer>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

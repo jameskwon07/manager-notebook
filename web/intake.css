@@ -11,6 +11,14 @@
 .ib-count.crit { border-color: var(--bad); } .ib-count.crit b { color: var(--bad); }
 .ib-count.warn b { color: var(--warn); }
 
+.ib-link { padding: 8px 10px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; }
+.ib-link .mono { flex: 1 1 220px; overflow-wrap: anywhere; min-width: 0; font-weight: 600; }
+.ib-pick { display: grid; gap: 4px; }
+.ib-pick select { width: auto; max-width: 100%; }
+.ib-door .row .ex { flex: 1 1 240px; }
+.ib-manual > summary { cursor: pointer; font-weight: 700; }
+.ib-manual[open] > summary { margin-bottom: 4px; }
+
 .ib-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .ib-item { border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 0 8px 8px 0; padding: 10px 14px; display: grid; gap: 6px; background: var(--sheet); min-width: 0; }
 .ib-item.over { border-left-color: var(--bad); }
@@ -26,6 +34,7 @@
 .ib-actions select { width: auto; font-size: var(--s-1); padding: 4px 8px; }
 .ib-edit { border-top: 1px dashed var(--rule); padding-top: 10px; display: grid; gap: 10px; }
 .ib-edit .say { max-height: 14em; overflow: auto; }
+.ib-edit .row .mono { overflow-wrap: anywhere; min-width: 0; }
 
 .ib-settings > summary { cursor: pointer; font-weight: 700; }
 .ib-settings[open] > summary { margin-bottom: 4px; }

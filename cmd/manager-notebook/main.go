@@ -1,6 +1,6 @@
 // Command manager-notebook runs the offline manager's notebook.
 //
-//	manager-notebook [--demo] [--data DIR] [--port N] [--no-browser]
+//	manager-notebook [--demo] [--data DIR] [--port N] [--no-browser] [--only intake] [--share]
 //	                              start the web server (see usageText)
 //	manager-notebook healthcheck  exit 0 when /api/health answers ok (for HEALTHCHECK)
 //	manager-notebook version      print the version
@@ -156,6 +156,34 @@ func run(o options) error {
 		log.Printf("가이드 경고: %s", w)
 	}
 
+	// 요청 창구는 따로 연 포트에서 요청 보내기 화면만 엽니다. 못 열면 수첩만 켭니다.
+	var askSrv *http.Server
+	askStatus := server.AskStatus{}
+	if len(plan.askPorts) > 0 {
+		aln, aport, aerr := listenAsk(plan)
+		if aerr != nil {
+			log.Printf("요청 창구를 열지 못해 수첩만 켭니다: %v", aerr)
+		} else {
+			addrs, _ := net.InterfaceAddrs()
+			askStatus = server.AskStatus{On: true, Port: aport, URLs: askURLs(plan, aport, addrs)}
+			askSrv = &http.Server{
+				Handler:           server.NewAsk(server.AskConfig{Version: version, Store: st, Web: web, Demo: plan.demo}),
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       120 * time.Second,
+				MaxHeaderBytes:    32 << 10,
+				ErrorLog:          log.New(os.Stderr, "http(창구): ", log.LstdFlags),
+			}
+			go func() {
+				log.Printf("요청 창구 열림: %s (요청 보내기 화면만)", aln.Addr())
+				if err := askSrv.Serve(aln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					log.Printf("요청 창구가 멈췄습니다: %v", err)
+				}
+			}()
+		}
+	}
+
 	srv := server.New(server.Config{
 		Version:  version,
 		Password: password,
@@ -165,6 +193,7 @@ func run(o options) error {
 		Web:      web,
 		Demo:     plan.demo,
 		Only:     plan.only,
+		Ask:      askStatus,
 	})
 	if srv.AuthEnabled() {
 		log.Printf("로그인 켜짐 (NOTEBOOK_PASSWORD 있음)")
@@ -197,7 +226,11 @@ func run(o options) error {
 		errCh <- hs.Serve(ln)
 	}()
 	if plan.desktop {
-		printDesktopBanner(os.Stdout, plan, port, version)
+		links := askStatus.URLs
+		if askStatus.On && len(links) == 0 {
+			links = []string{fmt.Sprintf("http://(이 PC 주소):%d/", askStatus.Port)}
+		}
+		printDesktopBanner(os.Stdout, plan, port, version, links...)
 		if plan.openBrowser {
 			if err := openBrowser(runtime.GOOS, localURL(port)); err != nil {
 				log.Printf("브라우저를 열지 못했습니다(%v). %s 을 직접 여세요.", err, localURL(port))
@@ -213,6 +246,9 @@ func run(o options) error {
 		log.Printf("멈추는 중…")
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		if askSrv != nil {
+			_ = askSrv.Shutdown(sctx)
+		}
 		if err := hs.Shutdown(sctx); err != nil {
 			log.Printf("멈추는 중 오류: %v", err)
 		}

@@ -217,3 +217,90 @@ func TestOnlyIntake(t *testing.T) {
 		t.Fatalf("banner: %s", b.String())
 	}
 }
+
+func TestShareDoor(t *testing.T) {
+	o, err := parseOptions([]string{"--share"})
+	if err != nil || !o.share {
+		t.Fatalf("--share: %+v %v", o, err)
+	}
+	o2, err := parseOptions([]string{"--share-port", "9180"})
+	if err != nil || !o2.share || o2.sharePort != 9180 {
+		t.Fatalf("--share-port: %+v %v", o2, err)
+	}
+	if _, err := parseOptions([]string{"--share-port", "70000"}); err == nil {
+		t.Fatal("share port out of range should fail")
+	}
+
+	e := env(map[string]string{"LOCALAPPDATA": "L"})
+	p, _ := makePlan("windows", e, options{})
+	if len(p.askPorts) != 0 {
+		t.Fatalf("door should be closed by default: %v", p.askPorts)
+	}
+	p, _ = makePlan("windows", e, o)
+	if len(p.askPorts) != 10 || p.askPorts[0] != 8180 || p.askAddr(8180) != ":8180" {
+		t.Fatalf("share plan: %v %s", p.askPorts, p.askAddr(8180))
+	}
+	if p.addr(p.ports[0]) != "127.0.0.1:8080" {
+		t.Fatalf("the notebook itself must stay on 127.0.0.1: %s", p.addr(p.ports[0]))
+	}
+	p, _ = makePlan("windows", e, options{share: true, demo: true})
+	if p.askPorts[0] != 8190 {
+		t.Fatalf("demo door port %v", p.askPorts)
+	}
+	p, _ = makePlan("windows", e, o2)
+	if len(p.askPorts) != 1 || p.askPorts[0] != 9180 {
+		t.Fatalf("fixed door port %v", p.askPorts)
+	}
+	// 컨테이너: NOTEBOOK_ASK_ADDR 로 켜고, 링크는 NOTEBOOK_ASK_URL 로만 압니다.
+	cont := map[string]string{"NOTEBOOK_ADDR": ":8080", "NOTEBOOK_DATA_DIR": "/data", "NOTEBOOK_ASK_ADDR": ":8180"}
+	p, _ = makePlan("linux", env(cont), options{})
+	if p.askAddr(p.askPorts[0]) != ":8180" || len(askURLs(p, 8180, nil)) != 0 {
+		t.Fatalf("container door: %+v", p)
+	}
+	cont["NOTEBOOK_ASK_URL"] = "http://10.1.2.3:8180"
+	p, _ = makePlan("linux", env(cont), options{})
+	if u := askURLs(p, 8180, nil); len(u) != 1 || u[0] != "http://10.1.2.3:8180/" {
+		t.Fatalf("NOTEBOOK_ASK_URL: %v", u)
+	}
+}
+
+func TestAskURLsRanksCompanyNetworksFirst(t *testing.T) {
+	cidr := func(s string) net.Addr {
+		ip, n, err := net.ParseCIDR(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.IP = ip
+		return n
+	}
+	addrs := []net.Addr{cidr("127.0.0.1/8"), cidr("172.20.0.1/16"), cidr("169.254.3.4/16"), cidr("192.168.0.7/24"), cidr("fe80::1/64"), cidr("10.20.30.40/8"), cidr("100.64.1.2/10")}
+	got := askURLs(launchPlan{desktop: true}, 8180, addrs)
+	want := []string{"http://10.20.30.40:8180/", "http://192.168.0.7:8180/", "http://172.20.0.1:8180/", "http://100.64.1.2:8180/"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+}
+
+func TestListenAskAndBanner(t *testing.T) {
+	port := freePort(t)
+	ln, got, err := listenAsk(launchPlan{askPorts: []int{port}})
+	if err != nil || got != port {
+		t.Fatalf("listenAsk: %d %v", got, err)
+	}
+	defer ln.Close()
+	if _, _, err := listenAsk(launchPlan{askPorts: []int{port}}); err == nil || !strings.Contains(err.Error(), "--share-port") {
+		t.Fatalf("busy door port should hint --share-port: %v", err)
+	}
+	var b strings.Builder
+	printDesktopBanner(&b, launchPlan{desktop: true, dataDir: "D", only: "intake"}, 8080, "2.2.0", "http://10.0.0.5:8180/", "http://192.168.0.7:8180/")
+	for _, want := range []string{"창구   http://10.0.0.5:8180/", "http://192.168.0.7:8180/", "이 PC에서만", "방화벽"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("banner lacks %q:\n%s", want, b.String())
+		}
+	}
+	b.Reset()
+	printDesktopBanner(&b, launchPlan{desktop: true, dataDir: "D"}, 8080, "2.2.0")
+	if strings.Contains(b.String(), "창구") {
+		t.Errorf("no door, no door line:\n%s", b.String())
+	}
+}

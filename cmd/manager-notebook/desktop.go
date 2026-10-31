@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,10 @@ const usageText = `사용법: manager-notebook [옵션]
   --port 번호    포트 (기본 8080, 체험 모드 8090). PC에서 실행하면 이 PC 안(127.0.0.1)에서만 열립니다.
   --no-browser   시작할 때 브라우저를 열지 않습니다.
   --only intake  요청 접수함 하나만 엽니다(전체 수첩과 같은 기록을 씁니다).
+  --share        요청 창구를 엽니다: 같은 망의 동료가 링크로 요청을 직접 적어 보냅니다.
+                 창구는 따로 연 포트(기본 8180, 체험 모드 8190)로 요청 보내기 화면만 엽니다.
+                 수첩 화면은 그대로 이 PC 안에서만 열립니다.
+  --share-port 번호  요청 창구 포트 (--share 를 함께 켭니다)
 `
 
 // options are the command-line flags.
@@ -43,6 +48,8 @@ type options struct {
 	dataDir   string
 	port      int
 	only      string // "" (전체 수첩) 또는 "intake"(요청 접수함만)
+	share     bool   // 요청 창구를 엽니다
+	sharePort int
 }
 
 // parseOptions reads the flags after the program name.
@@ -55,6 +62,8 @@ func parseOptions(args []string) (options, error) {
 	fs.StringVar(&o.dataDir, "data", "", "")
 	fs.IntVar(&o.port, "port", 0, "")
 	fs.StringVar(&o.only, "only", "", "")
+	fs.BoolVar(&o.share, "share", false, "")
+	fs.IntVar(&o.sharePort, "share-port", 0, "")
 	if err := fs.Parse(args); err != nil {
 		return o, fmt.Errorf("옵션을 읽지 못했습니다: %v", err)
 	}
@@ -63,6 +72,12 @@ func parseOptions(args []string) (options, error) {
 	}
 	if o.port < 0 || o.port > 65535 {
 		return o, fmt.Errorf("포트는 1~65535 사이여야 합니다: %d", o.port)
+	}
+	if o.sharePort < 0 || o.sharePort > 65535 {
+		return o, fmt.Errorf("창구 포트는 1~65535 사이여야 합니다: %d", o.sharePort)
+	}
+	if o.sharePort > 0 {
+		o.share = true
 	}
 	o.dataDir = strings.TrimSpace(o.dataDir)
 	o.only = strings.TrimSpace(o.only)
@@ -82,6 +97,18 @@ type launchPlan struct {
 	envAddr     string // NOTEBOOK_ADDR when set and no --port: listen exactly there
 	openBrowser bool
 	only        string // "intake": 요청 접수함만
+
+	// 요청 창구: 모든 주소에서 열고(같은 망의 동료가 들어옴), 요청 보내기 화면만 둡니다.
+	askPorts   []int  // 비어 있으면 창구를 열지 않음
+	askEnvAddr string // NOTEBOOK_ASK_ADDR: 정확히 이 주소로 엶
+	askURL     string // NOTEBOOK_ASK_URL: 요청자에게 줄 링크(컨테이너처럼 주소를 알 수 없을 때)
+}
+
+func (p launchPlan) askAddr(port int) string {
+	if p.askEnvAddr != "" {
+		return p.askEnvAddr
+	}
+	return net.JoinHostPort("", strconv.Itoa(port))
 }
 
 func (p launchPlan) addr(port int) string {
@@ -145,7 +172,94 @@ func makePlan(goos string, getenv func(string) string, o options) (launchPlan, e
 	if p.only == "" && strings.TrimSpace(getenv("NOTEBOOK_ONLY")) == "intake" {
 		p.only = "intake"
 	}
+
+	askEnv := strings.TrimSpace(getenv("NOTEBOOK_ASK_ADDR"))
+	p.askURL = strings.TrimSpace(getenv("NOTEBOOK_ASK_URL"))
+	switch {
+	case o.sharePort > 0:
+		p.askPorts = []int{o.sharePort}
+	case askEnv != "":
+		p.askEnvAddr = askEnv
+		port := 8180
+		if _, ps, err := net.SplitHostPort(askEnv); err == nil {
+			if n, err := strconv.Atoi(ps); err == nil {
+				port = n
+			}
+		}
+		p.askPorts = []int{port}
+	case o.share:
+		base := 8180
+		if o.demo {
+			base = 8190
+		}
+		for i := 0; i < 10; i++ {
+			p.askPorts = append(p.askPorts, base+i)
+		}
+	}
 	return p, nil
+}
+
+// listenAsk opens the first free door port of the plan.
+func listenAsk(p launchPlan) (net.Listener, int, error) {
+	var lastErr error
+	for _, port := range p.askPorts {
+		ln, err := net.Listen("tcp", p.askAddr(port))
+		if err == nil {
+			return ln, port, nil
+		}
+		lastErr = err
+	}
+	if len(p.askPorts) == 1 {
+		return nil, 0, fmt.Errorf("요청 창구 %d 포트를 열 수 없습니다(다른 프로그램이 쓰는 중일 수 있습니다). --share-port 로 다른 번호를 주세요: %w", p.askPorts[0], lastErr)
+	}
+	return nil, 0, fmt.Errorf("요청 창구 %d~%d 포트를 모두 열 수 없습니다. --share-port 로 다른 번호를 주세요: %w", p.askPorts[0], p.askPorts[len(p.askPorts)-1], lastErr)
+}
+
+// askURLs are the links to give requesters: NOTEBOOK_ASK_URL when set,
+// otherwise this PC's network addresses (company LAN ranges first).
+// In a container the PC's address is unknown, so only NOTEBOOK_ASK_URL counts.
+func askURLs(p launchPlan, port int, addrs []net.Addr) []string {
+	if p.askURL != "" {
+		u := p.askURL
+		if !strings.HasSuffix(u, "/") {
+			u += "/"
+		}
+		return []string{u}
+	}
+	if !p.desktop {
+		return []string{}
+	}
+	type cand struct {
+		ip   net.IP
+		rank int
+	}
+	var cs []cand
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := n.IP.To4()
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			continue
+		}
+		rank := 3
+		switch {
+		case ip[0] == 10:
+			rank = 0
+		case ip[0] == 192 && ip[1] == 168:
+			rank = 1
+		case ip[0] == 172 && ip[1]&0xf0 == 16:
+			rank = 2 // 가상 네트워크(WSL·Docker·Hyper-V)가 자주 쓰는 대역이라 뒤로
+		}
+		cs = append(cs, cand{ip, rank})
+	}
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].rank < cs[j].rank })
+	out := []string{}
+	for _, c := range cs {
+		out = append(out, "http://"+net.JoinHostPort(c.ip.String(), strconv.Itoa(port))+"/")
+	}
+	return out
 }
 
 // userDataDir is the per-user folder a desktop program should write to.
@@ -249,7 +363,8 @@ var openBrowser = func(goos, url string) error {
 func localURL(port int) string { return "http://localhost:" + strconv.Itoa(port) + "/" }
 
 // printDesktopBanner tells a person at the console what is running and how to stop it.
-func printDesktopBanner(w io.Writer, p launchPlan, port int, ver string) {
+// askLinks are the door links when the door is open.
+func printDesktopBanner(w io.Writer, p launchPlan, port int, ver string, askLinks ...string) {
 	fmt.Fprintln(w, "")
 	name := "관리 수첩"
 	if p.only == "intake" {
@@ -264,6 +379,14 @@ func printDesktopBanner(w io.Writer, p launchPlan, port int, ver string) {
 	fmt.Fprintf(w, "  주소   %s   (브라우저가 열리지 않으면 이 주소를 여세요)\n", localURL(port))
 	if p.dataDir != "" {
 		fmt.Fprintf(w, "  데이터 %s\n", filepath.Join(p.dataDir, "notebook.db"))
+	}
+	if len(askLinks) > 0 {
+		fmt.Fprintf(w, "  창구   %s   (동료에게 줄 요청 보내기 링크)\n", askLinks[0])
+		for _, l := range askLinks[1:] {
+			fmt.Fprintf(w, "         %s\n", l)
+		}
+		fmt.Fprintln(w, "         같은 망의 누구나 요청을 보낼 수 있습니다. 수첩 화면은 이 PC에서만 열립니다.")
+		fmt.Fprintln(w, "         Windows 방화벽 창이 뜨면 [액세스 허용]을 눌러야 동료가 들어올 수 있습니다.")
 	}
 	fmt.Fprintln(w, "  끄기   이 창을 닫거나 Ctrl+C")
 	fmt.Fprintln(w, "")

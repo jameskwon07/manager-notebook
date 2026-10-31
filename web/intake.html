@@ -13,12 +13,13 @@
 <script src="/intake.js" defer></script>
 </head>
 <body>
-<!-- 관리 수첩의 '한 기능판': 요청 접수함만 있습니다. 데이터는 전체 수첩과 같습니다(requests·programs·settings). -->
+<!-- 관리 수첩의 '한 기능판': 요청 접수함만 있습니다. 데이터는 전체 수첩과 같습니다(requests·programs·settings).
+     요청은 요청자가 요청 창구(--share 로 따로 연 포트의 ask.html)에 직접 적고, 이 화면에는 바로 들어옵니다. -->
 <div class="app ib" id="app">
   <header class="ib-top">
     <div class="ib-brand">
       <h1>요청 접수함</h1>
-      <p class="ib-sub">받은 요청을 정리해 근무일 2일 안에 담당 리드에게 넘깁니다. 빈칸만 되묻고, 날짜는 리드가 추정한 뒤에만 말합니다.</p>
+      <p class="ib-sub">요청은 요청자가 창구 링크에 직접 적어 보냅니다. 나는 빈칸만 되묻고 근무일 2일 안에 담당 리드에게 넘깁니다. 날짜는 리드가 추정한 뒤에만 말합니다.</p>
     </div>
     <div class="ib-counts" id="ib-counts" aria-live="polite"></div>
   </header>
@@ -26,20 +27,28 @@
   <div class="callout warn demo-band" id="demo-band" hidden><b>체험 모드</b> 예시 데이터로 열었습니다. 마음껏 바꿔 보세요. 프로그램을 끄면 기록이 모두 사라집니다.</div>
   <div class="callout store" id="store-note" role="status" hidden></div>
 
-  <section class="card" aria-labelledby="ib-new-h">
-    <h2 id="ib-new-h">요청 적기</h2>
+  <section class="card ib-door" id="ib-door" aria-labelledby="ib-door-h">
+    <h2 id="ib-door-h">요청 창구</h2>
+    <div class="stack" id="ib-door-body"></div>
+  </section>
+
+  <details class="card ib-manual" id="ib-manual">
+    <summary>직접 적기 — 말로 받았거나, 요청자가 양식을 채워 메신저로 보냈을 때</summary>
     <form id="ib-form" class="form" novalidate>
-      <label class="wide" for="ib-raw"><span>받은 말 그대로</span><textarea id="ib-raw" rows="3" placeholder="메신저·메일로 받은 요청을 그대로 붙여 넣습니다. 이름은 [팀원]으로 바뀝니다."></textarea></label>
-      <label for="ib-from"><span>요청자(역할)</span><select id="ib-from"></select></label>
+      <label class="wide" for="ib-paste"><span>받은 양식 붙여 넣기(선택)</span><textarea id="ib-paste" rows="3" placeholder="요청자가 채워 보낸 양식을 붙여 넣으면 아래 칸이 저절로 나뉩니다. 이름은 [팀원]으로 바뀝니다."></textarea></label>
+      <label class="wide" for="ib-what"><span>무엇(한 줄)</span><input type="text" id="ib-what" autocomplete="off" placeholder="요청 한 줄"></label>
+      <label for="ib-from"><span>보낸 분</span><input type="text" id="ib-from" list="ib-roles-list" autocomplete="off" placeholder="이름이나 역할"></label>
+      <datalist id="ib-roles-list"></datalist>
       <label for="ib-prog"><span>어느 프로그램</span><select id="ib-prog"></select></label>
       <label for="ib-size"><span>크기</span><select id="ib-size"><option value="S">S 반나절 이하</option><option value="M" selected>M 1~5일</option><option value="L">L 사이클급</option></select></label>
       <label for="ib-why"><span>왜·누가 결정</span><input type="text" id="ib-why" autocomplete="off" placeholder="모르면 비워 둡니다. 되물을 칸이 됩니다."></label>
       <label for="ib-when"><span>언제까지와 이유</span><input type="text" id="ib-when" autocomplete="off" placeholder="날짜와 그 날짜인 이유"></label>
       <label for="ib-check"><span>확인 방법</span><input type="text" id="ib-check" autocomplete="off" placeholder="무엇을 보면 끝났다고 할지"></label>
+      <label class="wide" for="ib-raw"><span>자세히(선택)</span><textarea id="ib-raw" rows="2" placeholder="붙여 넣은 양식의 '자세히'가 여기 들어갑니다."></textarea></label>
       <label class="check" for="ib-urgent"><input type="checkbox" id="ib-urgent"><span>긴급(리드가 바로 처리하고, 여기에는 기록만)</span></label>
       <div class="wide row"><button class="btn primary" type="submit" id="ib-add">접수함에 적기</button><span class="ex">비워 둔 칸만 되묻습니다.</span></div>
     </form>
-  </section>
+  </details>
 
   <section class="card" aria-labelledby="ib-list-h">
     <div class="row between">
@@ -64,8 +73,11 @@
         </form>
       </div>
       <div class="stack">
-        <h3><label for="ib-roles">요청자 역할</label></h3>
-        <p class="ex">한 줄에 하나. 사람 이름 대신 역할을 씁니다.</p>
+        <h3><label for="ib-askurl">요청 창구 주소</label></h3>
+        <p class="ex">요청자에게 줄 링크의 앞부분. 비우면 이 PC 주소를 자동으로 씁니다. Docker로 켰다면 http://PC주소:8180/ 처럼 적습니다.</p>
+        <input type="text" id="ib-askurl" autocomplete="off" placeholder="자동" class="mono">
+        <h3><label for="ib-roles">보낸 분 예시(역할)</label></h3>
+        <p class="ex">직접 적을 때 고를 수 있는 역할. 한 줄에 하나.</p>
         <textarea id="ib-roles" rows="5"></textarea>
         <h3><label for="ib-hol">쉬는 날</label></h3>
         <p class="ex">근무일 시계에서 뺄 날. 한 줄에 'YYYY-MM-DD 이름'.</p>

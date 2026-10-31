@@ -287,7 +287,7 @@ req() {
   fi
   : >"$T/raw"
   if [[ $MODE == docker ]]; then
-    docker exec -i "$HELPER" curl "${args[@]}" "http://127.0.0.1:8080$path" <"$input" >"$T/raw" 2>/dev/null || true
+    docker exec -i "$HELPER" curl "${args[@]}" "http://127.0.0.1:${REQ_PORT:-8080}$path" <"$input" >"$T/raw" 2>/dev/null || true
   else
     curl "${args[@]}" "${BASE_URL%/}$path" <"$input" >"$T/raw" 2>/dev/null || true
   fi
@@ -757,11 +757,12 @@ fi
 # --demo 는 메모리에 예시 데이터를 만들고 /data 볼륨을 건드리지 않아야 합니다.
 # 바로 뒤 '인증 + 데이터 유지'에서 같은 볼륨이 그대로인지(export 와 같은지) 다시 확인합니다.
 if [[ $MODE == docker ]]; then
-  step "체험 모드(--demo --only intake): 메모리의 예시 데이터, 첫 화면은 요청 접수함, 볼륨은 그대로"
+  step "체험 모드(--demo --only intake) + 요청 창구: 메모리의 예시 데이터, 첫 화면은 요청 접수함, 창구 포트에는 요청 보내기만, 볼륨은 그대로"
   APP_DEMO="$APP-demo"
   docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
   docker run -d --name "$APP_DEMO" --network none --read-only --cap-drop ALL \
-    --security-opt no-new-privileges:true -v "$VOL:/data" "$IMAGE" --demo --only intake >/dev/null
+    --security-opt no-new-privileges:true -v "$VOL:/data" -e NOTEBOOK_ASK_ADDR=:8180 -e NOTEBOOK_ASK_URL=http://10.0.0.5:8180 \
+    "$IMAGE" --demo --only intake >/dev/null
   docker run -d --name "$APP_DEMO-curl" --network "container:$APP_DEMO" \
     --entrypoint sleep "$CURL_IMAGE" 1800 >/dev/null
   SAVED_HELPER=$HELPER
@@ -776,6 +777,49 @@ if [[ $MODE == docker ]]; then
     req GET /
     expect_status 200 "--only intake 의 첫 화면"
     expect "'요청 접수함' in t" "  첫 화면이 요청 접수함"
+    req GET /api/state
+    expect "d.get('ask') == {'on': True, 'port': 8180, 'urls': ['http://10.0.0.5:8180/']}" "state.ask: 창구 열림, 링크는 NOTEBOOK_ASK_URL"
+
+    # 요청 창구(8180): 요청 보내기 화면과 /api/ask 만 있고, 수첩 화면·API 는 없음
+    REQ_PORT=8180
+    req GET /
+    expect_status 200 "창구 GET /"
+    expect "'요청 보내기' in t and 'text/html' in h.get('content-type','')" "  창구 첫 화면은 요청 보내기"
+    expect "(lambda ss: [x[0].lstrip('/') for x in ss] == ['core.js','ask.js'])(script_srcs(t))" "  ask.html 이 core.js → ask.js 순서로 불러옴(인라인 스크립트 없음)"
+    expect "h.get('content-security-policy','').startswith(\"default-src 'self'\") and h.get('x-frame-options') == 'DENY'" "  창구에도 CSP·X-Frame-Options"
+    for spec in "/ask.js|javascript" "/ask.css|text/css" "/core.js|javascript" "/app.css|text/css"; do
+      req GET "${spec%%|*}"
+      expect_status 200 "창구 GET ${spec%%|*}"
+      expect "'${spec#*|}' in h.get('content-type','')" "  ${spec%%|*} 형식"
+    done
+    for path in /index.html /intake /app.js /content.json /login /api/state /api/export /api/guide /api/calendar.ics; do
+      req GET "$path"
+      expect_status 404 "창구 포트로는 GET $path 가 없음"
+    done
+    printf '%s' '{"what":"창구 시험 요청","from":"시험","when":"금요일, 점검 일정"}' >"$T/ask.json"
+    req POST /api/ask "$T/ask.json"
+    expect_status 201 "창구 POST /api/ask"
+    expect "re.fullmatch(r'[2-9a-hjkmnp-z]{10}', d.get('code','')) and d.get('status') == '접수' and d.get('missing') == ['why','check','program'] and d.get('editable') is True" "  접수 링크 코드·상태·빈칸"
+    ASK_CODE=$(val "d.get('code','')")
+    printf '%s' '{"what":"x"}' >"$T/ask.json"
+    req POST /api/docs/requests "$T/ask.json"
+    expect_status 404 "창구 포트로는 POST /api/docs/requests 가 없음"
+    req POST /api/ask "$T/ask.json" "Origin: http://evil.example"
+    expect_status 403 "다른 사이트에서 온 창구 요청은 막음"
+    printf '%s' '{"why":"팀장 지시","more":"덧붙임 시험"}' >"$T/ask.json"
+    req PATCH "/api/ask/$ASK_CODE" "$T/ask.json"
+    expect_status 200 "창구 PATCH /api/ask/<code>(빈칸 채우기)"
+    expect "d.get('why') == '팀장 지시' and '[덧붙임' in d.get('raw','') and d.get('addedAt')" "  채운 칸과 덧붙임"
+    req GET "/r/$ASK_CODE"
+    expect_status 200 "창구 GET /r/<code>"
+    req GET /api/ask/zzzzzzzzzz
+    expect_status 404 "없는 코드는 404"
+    REQ_PORT=8080
+    req GET /api/state
+    expect "len([r for r in d.get('requests') or [] if r.get('askCode') == '$ASK_CODE' and r.get('via') == '창구' and r.get('why') == '팀장 지시']) == 1" "창구로 보낸 요청이 수첩 접수함에 들어옴"
+    docker logs "$APP_DEMO" >"$T/demolog" 2>&1 || true
+    if grep -q "$ASK_CODE" "$T/demolog"; then bad "로그에 창구 링크 코드가 남음"; else ok "로그에 창구 링크 코드 없음"; fi
+    if grep -q '창구 POST /api/ask 201' "$T/demolog"; then ok "로그에 창구 요청의 모양만 남음"; else bad "창구 로그 줄이 없음" "$(tail -5 "$T/demolog")"; fi
   fi
   docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
   HELPER=$SAVED_HELPER

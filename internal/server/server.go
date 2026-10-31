@@ -54,6 +54,7 @@ type Config struct {
 	FailDelay time.Duration // delay after a wrong password (default 1s)
 	Demo      bool          // demo mode: example data in memory (/api/state says so)
 	Only      string        // "intake": the one-feature page (요청 접수함) is served at /
+	Ask       AskStatus     // 요청 창구(따로 연 포트)가 열렸는지와 요청자에게 줄 링크
 }
 
 // Server is an http.Handler.
@@ -289,7 +290,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, v any) erro
 func (s *Server) readObject(w http.ResponseWriter, r *http.Request, limit int64) (store.Doc, bool) {
 	var d store.Doc
 	if err := decodeBody(w, r, limit, &d); err != nil {
-		s.bodyErr(w, err)
+		bodyErr(w, err)
 		return nil, false
 	}
 	if d == nil {
@@ -299,7 +300,7 @@ func (s *Server) readObject(w http.ResponseWriter, r *http.Request, limit int64)
 	return d, true
 }
 
-func (s *Server) bodyErr(w http.ResponseWriter, err error) {
+func bodyErr(w http.ResponseWriter, err error) {
 	var mbe *http.MaxBytesError
 	if errors.As(err, &mbe) {
 		writeErr(w, http.StatusRequestEntityTooLarge, "too_large", "보낸 내용이 너무 큽니다.")
@@ -349,6 +350,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"auth":     s.AuthEnabled(), // 프런트엔드가 로그아웃 버튼을 보일지 정함
 		"demo":     s.cfg.Demo,      // 체험 모드면 화면 위에 안내 띠를 보임
 		"only":     s.cfg.Only,      // "intake" 면 요청 접수함만 쓰는 판
+		"ask":      s.askStatus(),   // 요청 창구가 열렸으면 요청자에게 줄 링크
 	}
 	// Every collection key is present, an empty list when there is nothing.
 	for _, c := range store.Collections {
@@ -359,6 +361,14 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		out[c] = docs
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) askStatus() AskStatus {
+	a := s.cfg.Ask
+	if a.URLs == nil {
+		a.URLs = []string{}
+	}
+	return a
 }
 
 func (s *Server) createDoc(w http.ResponseWriter, r *http.Request) {
@@ -456,7 +466,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 func (s *Server) importData(w http.ResponseWriter, r *http.Request) {
 	var raw map[string]json.RawMessage
 	if err := decodeBody(w, r, MaxImportBody, &raw); err != nil {
-		s.bodyErr(w, err)
+		bodyErr(w, err)
 		return
 	}
 	f, err := store.ParseImport(raw)
@@ -484,7 +494,7 @@ func (s *Server) llmProxy(w http.ResponseWriter, r *http.Request) {
 		} `json:"messages"`
 	}
 	if err := decodeBody(w, r, MaxBody, &req); err != nil {
-		s.bodyErr(w, err)
+		bodyErr(w, err)
 		return
 	}
 	msgs := make([]llm.Message, 0, len(req.Messages))
@@ -619,7 +629,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if isForm {
 		r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
 		if err := r.ParseForm(); err != nil {
-			s.bodyErr(w, err)
+			bodyErr(w, err)
 			return
 		}
 		pw = r.PostForm.Get("password")
@@ -628,7 +638,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			Password string `json:"password"`
 		}
 		if err := decodeBody(w, r, MaxBody, &body); err != nil {
-			s.bodyErr(w, err)
+			bodyErr(w, err)
 			return
 		}
 		pw = body.Password

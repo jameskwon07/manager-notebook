@@ -1,7 +1,8 @@
 # Windows 실행 파일 시험 (GitHub Actions windows-latest, pwsh).
 #   pwsh scripts/smoke-windows.ps1 -Exe .\manager-notebook.exe -Expected 2.1.0
 # 확인: 버전, 127.0.0.1 에서만 열림, 쓰기·읽기, 다시 켜도 기록이 남음, 두 번 실행하면 켜진 것을 씀,
-#       기본 데이터 폴더(%LOCALAPPDATA%\manager-notebook), 체험 모드(메모리·예시 데이터), 화면 파일.
+#       기본 데이터 폴더(%LOCALAPPDATA%\manager-notebook), 체험 모드(메모리·예시 데이터), 화면 파일,
+#       요청 접수함만(--only intake), 요청 창구(--share: 따로 연 포트에 요청 보내기 화면만).
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [string]$Expected = ""
@@ -90,13 +91,29 @@ try {
   Stop-Nb $p5; $p5 = $null
   Check "체험 모드는 기본 데이터를 건드리지 않음" ((Get-Item $defDb).LastWriteTimeUtc -eq $before)
 
-  # 6) 요청 접수함만(--only intake): 첫 화면이 요청 접수함
-  $p6 = Start-Nb @("--only", "intake", "--demo", "--no-browser", "--port", "18091") "p6"
+  # 6) 요청 접수함만(--only intake) + 요청 창구(--share): 첫 화면이 요청 접수함, 창구는 따로 연 포트
+  $p6 = Start-Nb @("--only", "intake", "--demo", "--share", "--share-port", "18191", "--no-browser", "--port", "18091") "p6"
   Wait-Health 18091 | Out-Null
   $home6 = Invoke-WebRequest "http://127.0.0.1:18091/" -UseBasicParsing
   Check "요청 접수함 첫 화면" ($home6.Content -match "요청 접수함")
   $st6 = Invoke-RestMethod "http://127.0.0.1:18091/api/state"
   Check "state.only = intake" ($st6.only -eq "intake")
+  Check "state.ask 열림(18191)" ($st6.ask.on -eq $true -and $st6.ask.port -eq 18191) ($st6.ask | ConvertTo-Json -Compress)
+  $door = Invoke-WebRequest "http://127.0.0.1:18191/" -UseBasicParsing
+  Check "창구 첫 화면은 요청 보내기" ($door.Content -match "요청 보내기")
+  $blocked = $true
+  foreach ($path in @("/index.html", "/api/state", "/api/export")) {
+    try { Invoke-WebRequest "http://127.0.0.1:18191$path" -UseBasicParsing | Out-Null; $blocked = $false } catch { if ($_.Exception.Response.StatusCode.value__ -ne 404) { $blocked = $false } }
+  }
+  Check "창구 포트로는 수첩 화면·API가 안 열림" $blocked
+  $sent = Post-Json "http://127.0.0.1:18191/api/ask" @{ what = "창구 시험 요청"; from = "시험" }
+  Check "창구로 요청 보냄" ($sent.code -match '^[a-z0-9]{10}$') ($sent | ConvertTo-Json -Compress)
+  $st6 = Invoke-RestMethod "http://127.0.0.1:18091/api/state"
+  Check "보낸 요청이 접수함에 들어옴" (@($st6.requests | Where-Object { $_.askCode -eq $sent.code -and $_.via -eq "창구" }).Count -eq 1)
+  $mainL = @(Get-NetTCPConnection -LocalPort 18091 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress })
+  $doorL = @(Get-NetTCPConnection -LocalPort 18191 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress })
+  Check "수첩은 127.0.0.1 에서만" (($mainL.Count -gt 0) -and -not ($mainL | Where-Object { $_ -ne "127.0.0.1" })) ($mainL -join ",")
+  Check "창구는 모든 주소에서" (($doorL | Where-Object { $_ -eq "0.0.0.0" -or $_ -eq "::" }).Count -gt 0) ($doorL -join ",")
   Stop-Nb $p6; $p6 = $null
 
   # 7) 버전 명령
