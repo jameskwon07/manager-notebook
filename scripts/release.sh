@@ -3,7 +3,7 @@
 #
 # 쓰는 법
 #   scripts/release.sh <VERSION> <DOCKERHUB_USER>
-#   VERSION=2.0.0 DOCKERHUB_USER=<DOCKERHUB_USER> scripts/release.sh
+#   VERSION=2.1.0 DOCKERHUB_USER=<DOCKERHUB_USER> scripts/release.sh
 #
 # 선택 환경변수
 #   GHCR_REPO=ghcr.io/jameskwon07/manager-notebook   GHCR 이미지 이름
@@ -49,9 +49,9 @@ die() { printf 'release: %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. 입력 확인
 say "입력 확인"
-[[ -n $VERSION ]] || die "VERSION 이 없습니다. 예: scripts/release.sh 2.0.0 <DOCKERHUB_USER>"
+[[ -n $VERSION ]] || die "VERSION 이 없습니다. 예: scripts/release.sh 2.1.0 <DOCKERHUB_USER>"
 VERSION=${VERSION#v}
-[[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || die "VERSION 은 2.0.0 같은 형식이어야 합니다: $VERSION"
+[[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || die "VERSION 은 2.1.0 같은 형식이어야 합니다: $VERSION"
 
 if [[ $SKIP_DOCKERHUB != 1 ]]; then
   [[ -n $DOCKERHUB_USER ]] || die "DOCKERHUB_USER 가 없습니다. 두 번째 인자로 주거나 SKIP_DOCKERHUB=1 을 쓰세요."

@@ -1,21 +1,30 @@
-# 관리 수첩 2 (manager-notebook 2.0)
+# 관리 수첩 2 (manager-notebook 2.1)
 
 프로그램마다 리드 1명과 서브 1명을 두는 팀에서, 파트 리드가 혼자 쓰는 관리 수첩입니다.
 외부 요청 접수, 프로그램·자리 계산, 결정 경계, 금요일 보고 초안, 물음 메모·막힘을 한 화면에 모았습니다.
-인터넷이 막힌 업무 PC에서 Docker 이미지 하나로 돌고, 브라우저에서 `http://localhost:8080` 으로 엽니다.
+인터넷이 막힌 업무 PC에서 Docker 이미지 하나, 또는 Docker 없이 Windows 실행 파일 하나로 돌고, 브라우저에서 `http://localhost:8080` 으로 엽니다.
+먼저 둘러보려면 체험 모드(`--demo`)로 예시 데이터를 열어 보세요.
 
 ## 약속
 
 - **외부 연결이 없습니다.** CDN, 웹 글꼴, 분석 도구, 업데이트 확인을 쓰지 않습니다.
   예외는 하나입니다. 사내 AI 주소(`LLM_BASE_URL`)를 직접 적었을 때만, 버튼을 누르면 그 주소로 요청을 보냅니다.
-- **데이터는 볼륨에만 있습니다.** 볼륨 안의 SQLite 파일 하나(`notebook.db`)입니다.
-  컨테이너를 지워도 볼륨은 남습니다.
+- **데이터는 이 PC의 파일 하나에만 있습니다.** SQLite 파일 하나(`notebook.db`)입니다.
+  Docker 판은 볼륨 안에 두고(컨테이너를 지워도 볼륨은 남음), 실행 파일 판은 `%LOCALAPPDATA%\manager-notebook` 에 둡니다.
 - **이미지에 회사·개인 정보가 없습니다.** 누구나 받을 수 있는 공개 이미지입니다.
   회사 주소, 비밀번호, 키는 실행할 때 `notebook.env` 파일로만 넣습니다.
   사람은 기본으로 `A`·`B`·`C`·`D` 기호로 표시합니다. 바꿀 때도 이니셜이나 기호만 쓰기를 권합니다.
 - 팀원 개인을 평가하거나 순위를 매기는 기능이 없습니다. 사람별로 세는 것은 '자리 계산'(한 사람이 맡은 활성 자리 수가 상한을 넘는지) 한 곳뿐입니다.
 - 자동으로 보내는 기능이 없습니다. 문장과 표는 모두 복사해서 씁니다.
 - Jira·Confluence·사내 메신저와 연동하지 않습니다. 복사해서 붙여 넣기만 합니다.
+
+## 2.1에서 바뀐 것
+
+- **Docker 없이 쓰는 Windows 실행 파일**이 생겼습니다. 아래 'Windows 실행 파일로 쓰기'를 보세요.
+- **체험 모드(`--demo`)**: 예시 데이터로 열어 보는 모드입니다. 기록은 메모리에만 있고 끄면 사라집니다. 쓰던 데이터는 건드리지 않습니다.
+  - 실행 파일: `run-demo.cmd` 를 두 번 누르거나 `manager-notebook.exe --demo`
+  - Docker: `docker run --rm -p 127.0.0.1:8090:8080 ghcr.io/jameskwon07/manager-notebook:2.1.0 --demo` 뒤 `http://localhost:8090`
+- 화면과 데이터 형식은 2.0과 같습니다. 2.0에서 그대로 올리면 됩니다.
 
 ## 2.0에서 바뀐 것
 
@@ -45,18 +54,52 @@
 
 | 레지스트리 | 주소 |
 |---|---|
-| GitHub (GHCR) | `ghcr.io/jameskwon07/manager-notebook:2.0.0` |
-| Docker Hub | `docker.io/<DOCKERHUB_USER>/manager-notebook:2.0.0` |
+| GitHub (GHCR) | `ghcr.io/jameskwon07/manager-notebook:2.1.0` |
+| Docker Hub | `docker.io/<DOCKERHUB_USER>/manager-notebook:2.1.0` |
 
 - `<DOCKERHUB_USER>` 는 배포한 사람의 Docker Hub 이름으로 바꿔 읽으세요.
-- **버전 태그(`2.0.0`)를 쓰세요.** `latest` 도 있지만, 언제 바뀔지 모릅니다.
+- **버전 태그(`2.1.0`)를 쓰세요.** `latest` 도 있지만, 언제 바뀔지 모릅니다.
 - 1.0으로 되돌릴 때 쓰는 `1.0.0` 태그도 그대로 남아 있습니다.
-- 회사가 레지스트리 미러(프록시)를 쓰면 주소 앞부분이 다를 수 있습니다. 예: `미러주소/jameskwon07/manager-notebook:2.0.0`. IT 부서에 물어보세요.
+- 회사가 레지스트리 미러(프록시)를 쓰면 주소 앞부분이 다를 수 있습니다. 예: `미러주소/jameskwon07/manager-notebook:2.1.0`. IT 부서에 물어보세요.
 - linux/amd64, linux/arm64 를 모두 지원합니다.
+
+## Windows 실행 파일로 쓰기 (Docker 없이)
+
+Docker Desktop 을 쓸 수 없거나 설치가 번거로우면 실행 파일 하나로 씁니다. 화면과 기능은 Docker 판과 같습니다.
+
+**1. 받기** (둘 중 하나)
+
+- 인터넷 PC에서: [GitHub Releases](https://github.com/jameskwon07/manager-notebook/releases) 에서 `manager-notebook-2.1.0-windows-amd64.zip` 과 `SHA256SUMS.txt` 를 받아, 회사가 허용한 방법으로 옮깁니다.
+- 레지스트리만 열린 망에서: Docker 가 있는 PC 한 대에서 묶음 이미지로 꺼냅니다. `-windows` 태그는 실행하는 이미지가 아니라 zip 을 담아 옮기는 묶음입니다.
+
+```powershell
+docker pull ghcr.io/jameskwon07/manager-notebook:2.1.0-windows
+docker create --name nb-exe ghcr.io/jameskwon07/manager-notebook:2.1.0-windows x
+docker cp nb-exe:/manager-notebook-2.1.0-windows-amd64.zip .
+docker cp nb-exe:/SHA256SUMS.txt .
+docker rm nb-exe
+```
+
+**2. 확인**: `Get-FileHash .\manager-notebook-2.1.0-windows-amd64.zip` 의 값이 `SHA256SUMS.txt` 와 같은지 봅니다.
+
+**3. 실행**: 압축을 풀고 `manager-notebook.exe` 를 두 번 누릅니다. 검은 창이 뜨고 브라우저가 `http://localhost:8080` 으로 열립니다. 끄려면 창을 닫거나 `Ctrl+C` 를 누릅니다.
+
+- 코드 서명이 없어 'Windows의 PC 보호' 창이 뜰 수 있습니다. **회사 PC 에서는 보안 담당자의 반입 승인을 먼저 받으세요.**
+- 이 PC 안(127.0.0.1)에서만 열립니다. 같은 망의 다른 PC 에서는 열 수 없고, 방화벽 허용 창도 뜨지 않습니다.
+- 한 번 더 실행하면 새로 띄우지 않고 켜져 있는 수첩을 브라우저로 엽니다. 8080 을 다른 프로그램이 쓰면 8081~8089 중 빈 포트를 씁니다.
+
+**4. 기록 위치**: `%LOCALAPPDATA%\manager-notebook\notebook.db`. 실행 파일을 새 버전으로 바꿔도 남습니다. 다른 폴더를 쓰려면 `--data D:\nb` 를 붙입니다.
+
+**5. 체험**: `run-demo.cmd` 를 두 번 누르면 `http://localhost:8090` 에서 예시 데이터로 열립니다. 창을 닫으면 사라집니다.
+
+- **Docker 판에서 옮기기**: Docker 판 설정 탭 → 내보내기(.json) → 실행 파일 판 설정 탭 → 가져오기.
+- **비밀번호·사내 AI**: Docker 판과 같은 환경변수를 씁니다. PowerShell 에서 `$env:LLM_BASE_URL="https://llm.example.internal/v1"` 처럼 정한 뒤, 같은 창에서 `.\manager-notebook.exe` 를 실행합니다.
+- **옵션**: `--port 9000`(다른 포트), `--data 폴더`(다른 데이터 폴더), `--no-browser`(브라우저 안 엶), `--demo`(체험), `version`(버전).
 
 ## 준비물
 
 - Windows 10/11 업무 PC
+- Docker 를 쓸 수 없으면 위 'Windows 실행 파일로 쓰기' 로 갑니다. 아래는 Docker 판 준비물입니다.
 - 아래 둘 중 하나
   - **Docker Desktop**
     - 직원 250명 이상이거나 연 매출 1천만 달러 이상인 회사는 **유료 구독**이 필요합니다.
@@ -77,9 +120,9 @@ PowerShell 을 열고 한 줄씩 붙여 넣습니다.
 **1. 이미지 받기** (둘 중 하나)
 
 ```powershell
-docker pull ghcr.io/jameskwon07/manager-notebook:2.0.0
+docker pull ghcr.io/jameskwon07/manager-notebook:2.1.0
 # 또는
-docker pull docker.io/<DOCKERHUB_USER>/manager-notebook:2.0.0
+docker pull docker.io/<DOCKERHUB_USER>/manager-notebook:2.1.0
 ```
 
 `<DOCKERHUB_USER>` 는 배포한 사람의 Docker Hub 이름으로 바꿔 넣습니다.
@@ -87,7 +130,7 @@ docker pull docker.io/<DOCKERHUB_USER>/manager-notebook:2.0.0
 이 뒤로는 받은 주소를 `$IMG` 에 넣고 씁니다. PowerShell 창을 새로 열면 이 줄을 다시 붙여 넣으세요.
 
 ```powershell
-$IMG = "ghcr.io/jameskwon07/manager-notebook:2.0.0"
+$IMG = "ghcr.io/jameskwon07/manager-notebook:2.1.0"
 ```
 
 **2. 실행**
@@ -105,7 +148,7 @@ docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v manager-notebook
 
 **4. 확인 (선택)**
 
-`{"ok":true,"version":"2.0.0"}` 처럼 나오면 정상입니다.
+`{"ok":true,"version":"2.1.0"}` 처럼 나오면 정상입니다.
 
 ```powershell
 curl.exe http://127.0.0.1:8080/api/health
@@ -150,7 +193,7 @@ $VOL = "manager-notebook"
 **3. 2.0 이미지 받기**
 
 ```powershell
-$IMG = "ghcr.io/jameskwon07/manager-notebook:2.0.0"
+$IMG = "ghcr.io/jameskwon07/manager-notebook:2.1.0"
 docker pull $IMG
 ```
 
@@ -175,7 +218,7 @@ docker run -d --name manager-notebook -p 127.0.0.1:8080:8080 -v "${VOL}:/data" -
 
 <http://localhost:8080> 을 열고 아래가 보이는지 봅니다.
 
-- 제목이 `관리 수첩 2` 이고, 설정 탭의 버전이 `2.0.0`
+- 제목이 `관리 수첩 2` 이고, 설정 탭의 버전이 `2.1.0`
 - 수첩 탭: 1.0의 물음 메모·나중에 보낼 것
 - 오늘 탭의 막힘 패널: 1.0의 열린 막힘(멈춤 상태도 그대로)
 - 수첩 탭의 '1.0 기록': 1.0에서 저장한 금요일 요약
@@ -418,8 +461,8 @@ docker image rm $IMG
 **digest 보기**
 
 ```powershell
-docker buildx imagetools inspect ghcr.io/jameskwon07/manager-notebook:2.0.0
-docker buildx imagetools inspect docker.io/<DOCKERHUB_USER>/manager-notebook:2.0.0
+docker buildx imagetools inspect ghcr.io/jameskwon07/manager-notebook:2.1.0
+docker buildx imagetools inspect docker.io/<DOCKERHUB_USER>/manager-notebook:2.1.0
 ```
 
 - 두 곳의 `Digest:` 값이 같아야 합니다.
@@ -432,13 +475,13 @@ docker buildx imagetools inspect docker.io/<DOCKERHUB_USER>/manager-notebook:2.0
 **SBOM(들어 있는 부품 목록) 보기**
 
 ```powershell
-docker buildx imagetools inspect ghcr.io/jameskwon07/manager-notebook:2.0.0 --format '{{json .SBOM}}'
+docker buildx imagetools inspect ghcr.io/jameskwon07/manager-notebook:2.1.0 --format '{{json .SBOM}}'
 ```
 
 **빌드 기록(provenance) 보기**
 
 ```powershell
-docker buildx imagetools inspect ghcr.io/jameskwon07/manager-notebook:2.0.0 --format '{{json .Provenance}}'
+docker buildx imagetools inspect ghcr.io/jameskwon07/manager-notebook:2.1.0 --format '{{json .Provenance}}'
 ```
 
 **취약점 검사(선택, 인터넷이 되는 PC에서)**
@@ -459,7 +502,7 @@ Remove-Item image.tar
 |---|---|
 | 페이지가 안 열림 | `docker ps` 에 `manager-notebook` 이 있는지, `docker logs --tail 50 manager-notebook` 에 오류가 있는지 |
 | 2.0으로 올렸는데 1.0 메모가 안 보임 | 다른 볼륨을 붙였을 가능성이 큽니다. `docker volume ls` 로 이름을 보고, '1.0에서 올리기' 2번에서 확인한 볼륨으로 다시 만듭니다. 새로 생긴 빈 볼륨은 지워도 됩니다 |
-| 제목이 아직 `관리 수첩` (2 없음) | 브라우저가 옛 화면을 들고 있습니다. `Ctrl+F5` 로 새로 고칩니다. 그래도 같으면 `docker ps` 의 이미지 태그가 `2.0.0` 인지 봅니다 |
+| 제목이 아직 `관리 수첩` (2 없음) | 브라우저가 옛 화면을 들고 있습니다. `Ctrl+F5` 로 새로 고칩니다. 그래도 같으면 `docker ps` 의 이미지 태그가 `2.1.0` 인지 봅니다 |
 | `port is already allocated` | 8080 을 다른 프로그램(또는 지우지 않은 1.0 컨테이너)이 씁니다. `docker ps -a` 로 보고 지우거나, `-p 127.0.0.1:18080:8080` 으로 다시 실행합니다 |
 | `Conflict. The container name "/manager-notebook" is already in use` | 같은 이름의 컨테이너가 남아 있습니다. `docker rm -f manager-notebook` 뒤에 다시 실행합니다(볼륨은 지워지지 않습니다) |
 | `open ...notebook.env: no such file` | 설정 파일 경로가 틀렸습니다. `"$HOME\manager-notebook\notebook.env"` 가 있는지 봅니다. 쓰지 않는다면 `--env-file ...` 을 빼고 실행합니다 |
@@ -496,9 +539,11 @@ Remove-Item image.tar
 ```bash
 go vet ./... && go test ./...                                      # Go 시험
 node --test web/test/                                              # 화면 계산(core.js) 시험
-docker build -t manager-notebook:dev --build-arg VERSION=2.0.0 .   # 빌드
-EXPECTED_VERSION=2.0.0 scripts/smoke.sh manager-notebook:dev        # 연기 시험(--network none --read-only)
-scripts/release.sh 2.0.0 <DOCKERHUB_USER>                           # 검사 후 두 레지스트리에 멀티아키 push
+docker build -t manager-notebook:dev --build-arg VERSION=2.1.0 .   # 빌드
+EXPECTED_VERSION=2.1.0 scripts/smoke.sh manager-notebook:dev        # 연기 시험(--network none --read-only)
+scripts/release.sh 2.1.0 <DOCKERHUB_USER>                           # 검사 후 두 레지스트리에 멀티아키 push
+scripts/build-windows.sh 2.1.0 dist                                  # Windows 실행 파일 zip·SHA256SUMS (CI 는 Go 1.26 으로 빌드)
+pwsh scripts/smoke-windows.ps1 -Exe .\manager-notebook.exe -Expected 2.1.0   # Windows 에서 실행 시험
 ```
 
 - smoke 시험은 호스트 포트를 쓰지 않습니다(`--network none` 컨테이너 안에서 curl 로 요청). 이름이 `nb2-smoke-` 로 시작하는 컨테이너·볼륨을 만들고 끝나면 지웁니다.
@@ -510,7 +555,8 @@ scripts/release.sh 2.0.0 <DOCKERHUB_USER>                           # 검사 후
 - `release.sh` 는 로그인하지 않습니다. 먼저 `docker login docker.io`, `docker login ghcr.io` 를 해 두세요.
 - push 전에 smoke 시험과 trivy 검사(HIGH·CRITICAL 0건)를 통과해야 합니다. trivy 이미지는 digest 로 고정하고, Docker 소켓 대신 `docker save` 한 tar 를 검사합니다.
 - 베이스 이미지(Dockerfile)와 GitHub 액션(release.yml)은 digest·커밋 SHA 로 고정했습니다. 올릴 때는 `.github/dependabot.yml` 의 제안을 봅니다.
-- GitHub 에 `v2.0.0` 같은 태그를 올리면 `.github/workflows/release.yml` 이 같은 일을 합니다.
+- GitHub 에 `v2.1.0` 같은 태그를 올리면 `.github/workflows/release.yml` 이 같은 일을 합니다.
+  Windows 실행 파일도 만들어 windows-latest 에서 실행 시험을 한 뒤, GitHub Release 에 zip 을 올리고 `<버전>-windows` 묶음 태그를 두 레지스트리에 올립니다.
   Docker Hub 에도 올리려면 저장소 Secrets 에 `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` 을 넣습니다.
 - **GHCR 패키지는 처음 올리면 비공개입니다.** GitHub → Packages → manager-notebook → Package settings → Change visibility 에서 Public 으로 바꿔야 로그인 없이 받을 수 있습니다.
 - Docker Hub 저장소도 Public 인지 확인합니다.

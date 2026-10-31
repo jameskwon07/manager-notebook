@@ -52,6 +52,7 @@ type Config struct {
 	Logger    *log.Logger  // nil = log.Default()
 	Now       func() time.Time
 	FailDelay time.Duration // delay after a wrong password (default 1s)
+	Demo      bool          // demo mode: example data in memory (/api/state says so)
 }
 
 // Server is an http.Handler.
@@ -341,6 +342,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"settings": st.Settings,
 		"llm":      map[string]any{"enabled": s.cfg.LLM.Enabled(), "model": s.cfg.LLM.Model()},
 		"auth":     s.AuthEnabled(), // 프런트엔드가 로그아웃 버튼을 보일지 정함
+		"demo":     s.cfg.Demo,      // 체험 모드면 화면 위에 안내 띠를 보임
 	}
 	// Every collection key is present, an empty list when there is nothing.
 	for _, c := range store.Collections {

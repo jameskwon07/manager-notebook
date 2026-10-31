@@ -252,3 +252,7 @@ details.more[open] > summary { margin-bottom: 6px; }
 /* 자동 복사가 막혔을 때 여는 칸 */
 .copy-box { position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 30; max-width: 720px; margin: 0 auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--sheet); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
 .copy-box textarea { width: 100%; font-family: var(--f-mono); font-size: var(--s-1); }
+
+/* 체험 모드 안내 띠 */
+.callout.demo-band { margin-top: 12px; font-size: var(--s-1); display: block; }
+.callout.demo-band b { margin-right: 6px; }

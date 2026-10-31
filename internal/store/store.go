@@ -71,8 +71,9 @@ func ValidID(id string) bool { return idPattern.MatchString(id) }
 
 // Store wraps the SQLite database.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db   *sql.DB
+	now  func() time.Time
+	hold *sql.Conn // keeps an in-memory database alive (OpenMemory only)
 
 	idMu   sync.Mutex
 	lastMS int64
@@ -86,6 +87,30 @@ func Open(dataDir string) (*Store, error) {
 	}
 	path := filepath.Join(dataDir, "notebook.db")
 	return OpenDSN("file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
+}
+
+// OpenMemory opens a private in-memory database. It is used by demo mode
+// (--demo), so example data never touches the data folder and is gone when
+// the process stops. One connection is held open for the life of the store:
+// a shared-cache memory database disappears when its last connection closes.
+func OpenMemory() (*Store, error) {
+	dsn := fmt.Sprintf("file:manager-notebook-demo-%d?mode=memory&cache=shared&_pragma=busy_timeout(5000)", time.Now().UnixNano())
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(2) // one held below, one for queries
+	hold, err := db.Conn(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	s := &Store{db: db, now: time.Now, hold: hold}
+	if err := s.migrate(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 // OpenDSN opens a database by DSN (tests use this with a temp dir).
@@ -105,7 +130,12 @@ func OpenDSN(dsn string) (*Store, error) {
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s.hold != nil {
+		s.hold.Close()
+	}
+	return s.db.Close()
+}
 
 // Ping checks the database connection.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }

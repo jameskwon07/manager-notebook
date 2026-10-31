@@ -338,12 +338,12 @@ func TestStateHasAllCollections(t *testing.T) {
 			t.Fatalf("state %s: %s", c, b)
 		}
 	}
-	for _, k := range []string{"version", "settings", "llm", "auth"} {
+	for _, k := range []string{"version", "settings", "llm", "auth", "demo"} {
 		if _, ok := st[k]; !ok {
 			t.Fatalf("state lacks %s: %s", k, b)
 		}
 	}
-	if len(st) != len(want)+4 || st["version"] != "2.0.0" || st["settings"] != nil {
+	if len(st) != len(want)+5 || st["version"] != "2.0.0" || st["settings"] != nil || st["demo"] != false {
 		t.Fatalf("state keys: %s", b)
 	}
 }

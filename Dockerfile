@@ -6,7 +6,7 @@
 # 사내 값은 실행할 때 --env-file 로만 넣습니다.
 #
 # 로컬 빌드:   docker build -t manager-notebook:dev .
-# 버전 지정:   docker build --build-arg VERSION=2.0.0 -t manager-notebook:2.0.0 .
+# 버전 지정:   docker build --build-arg VERSION=2.1.0 -t manager-notebook:2.1.0 .
 # 배포 빌드:   scripts/release.sh (buildx 멀티아키 + SBOM + provenance)
 
 # SPEC §8 은 golang:1.24 였지만, 1.24 로 만든 바이너리는 trivy 에서 Go 표준 라이브러리
@@ -28,7 +28,7 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm${GO_DIGEST} AS buil
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=2.0.0
+ARG VERSION=2.1.0
 
 ENV CGO_ENABLED=0 \
     GOFLAGS=-mod=readonly
@@ -58,7 +58,7 @@ RUN mkdir -p /out/data && chmod 0750 /out/data
 # digest 는 nonroot 태그의 멀티아키 목록(index)입니다.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
-ARG VERSION=2.0.0
+ARG VERSION=2.1.0
 
 LABEL org.opencontainers.image.title="manager-notebook" \
       org.opencontainers.image.description="프로그램 리드 체계용 개인 관리 수첩. 외부 연결 없음, 데이터는 /data 볼륨에만 저장." \

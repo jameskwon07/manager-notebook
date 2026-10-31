@@ -4,7 +4,7 @@
 # 쓰는 법
 #   scripts/smoke.sh [이미지]                 # 기본 이미지: manager-notebook:dev
 #   BUILD=1 scripts/smoke.sh                  # 먼저 docker build 를 하고 시험
-#   EXPECTED_VERSION=2.0.0 scripts/smoke.sh   # health·export 의 버전까지 확인
+#   EXPECTED_VERSION=2.1.0 scripts/smoke.sh   # health·export 의 버전까지 확인
 #   KEEP=1 scripts/smoke.sh                   # 끝나도 컨테이너·볼륨을 지우지 않음(문제 볼 때)
 #   BASE_URL=http://127.0.0.1:18080 SMOKE_ALLOW_WIPE=1 scripts/smoke.sh
 #                                             # 이미 떠 있는 시험용 서버(비밀번호 없음)를 시험.
@@ -86,7 +86,7 @@ cleanup() {
     if [[ $KEEP == 1 ]]; then
       printf '\nKEEP=1: 남겨 둔 것 — 컨테이너 %s / %s, 볼륨 %s\n' "$APP" "$APP_AUTH" "$VOL"
     else
-      docker rm -f "$APP-curl" "$APP_AUTH-curl" "$APP" "$APP_AUTH" >/dev/null 2>&1 || true
+      docker rm -f "$APP-curl" "$APP_AUTH-curl" "$APP" "$APP_AUTH" "$APP-demo" "$APP-demo-curl" >/dev/null 2>&1 || true
       docker volume rm -f "$VOL" >/dev/null 2>&1 || true
     fi
   fi
@@ -399,7 +399,7 @@ wait_health() {
 }
 
 # ================================================================ 시작
-printf 'manager-notebook 2.0 smoke — 모드: %s\n' "$MODE"
+printf 'manager-notebook 2.1 smoke — 모드: %s\n' "$MODE"
 
 if [[ $MODE == docker ]]; then
   if [[ $BUILD == 1 ]]; then
@@ -747,6 +747,30 @@ if [[ $MODE == docker ]]; then
   if grep -q "$SECRET_MARK" "$T/applog"; then bad "로그에 메모·요청 내용이 남음" "$(grep -m1 "$SECRET_MARK" "$T/applog")"; else ok "로그에 메모·요청 내용 없음"; fi
   if grep -q 'GET /api/health 200' "$T/applog"; then bad "정상 health 요청이 로그에 남음(HEALTHCHECK 30초마다 쌓임)"; else ok "정상 health 요청은 로그에 남기지 않음"; fi
   if grep -qiE 'https?://[^ ]*(googleapis|gstatic|github|docker|update)' "$T/applog"; then note "로그에 외부 주소가 보임" "$(grep -m1 -iE 'https?://' "$T/applog")"; else ok "로그에 외부 연결 흔적 없음"; fi
+fi
+
+# ---------------------------------------------------------------- 체험 모드
+# --demo 는 메모리에 예시 데이터를 만들고 /data 볼륨을 건드리지 않아야 합니다.
+# 바로 뒤 '인증 + 데이터 유지'에서 같은 볼륨이 그대로인지(export 와 같은지) 다시 확인합니다.
+if [[ $MODE == docker ]]; then
+  step "체험 모드(--demo): 메모리의 예시 데이터, 볼륨은 그대로"
+  APP_DEMO="$APP-demo"
+  docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
+  docker run -d --name "$APP_DEMO" --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges:true -v "$VOL:/data" "$IMAGE" --demo >/dev/null
+  docker run -d --name "$APP_DEMO-curl" --network "container:$APP_DEMO" \
+    --entrypoint sleep "$CURL_IMAGE" 1800 >/dev/null
+  SAVED_HELPER=$HELPER
+  HELPER="$APP_DEMO-curl"
+  if wait_health "$APP_DEMO"; then
+    req GET /api/state
+    expect_status 200 "체험 모드 GET /api/state"
+    expect "d.get('demo') is True" "state.demo = true"
+    expect "len(d.get('programs') or []) == 7 and len(d.get('requests') or []) == 7" "예시 프로그램 7개·요청 7건"
+    expect "(d.get('settings') or {}).get('people') and len(d['settings']['people']) == 4" "예시 사람 4명(A~D)"
+  fi
+  docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
+  HELPER=$SAVED_HELPER
 fi
 
 # ---------------------------------------------------------------- 인증 + 데이터 유지

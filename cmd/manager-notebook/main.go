@@ -1,6 +1,7 @@
 // Command manager-notebook runs the offline manager's notebook.
 //
-//	manager-notebook              start the web server
+//	manager-notebook [--demo] [--data DIR] [--port N] [--no-browser]
+//	                              start the web server (see usageText)
 //	manager-notebook healthcheck  exit 0 when /api/health answers ok (for HEALTHCHECK)
 //	manager-notebook version      print the version
 package main
@@ -18,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -25,14 +27,15 @@ import (
 	"unicode/utf8"
 
 	assets "github.com/jameskwon07/manager-notebook"
+	"github.com/jameskwon07/manager-notebook/internal/demo"
 	"github.com/jameskwon07/manager-notebook/internal/guide"
 	"github.com/jameskwon07/manager-notebook/internal/llm"
 	"github.com/jameskwon07/manager-notebook/internal/server"
 	"github.com/jameskwon07/manager-notebook/internal/store"
 )
 
-// version is set with -ldflags "-X main.version=2.0.0".
-var version = "2.0.0"
+// version is set with -ldflags "-X main.version=2.1.0".
+var version = "2.1.0"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -43,15 +46,18 @@ func main() {
 		case "healthcheck":
 			os.Exit(healthcheck())
 		case "help", "--help", "-h":
-			fmt.Println("사용법: manager-notebook [healthcheck|version]")
+			fmt.Print(usageText)
 			return
-		default:
-			fmt.Fprintf(os.Stderr, "모르는 명령입니다: %s\n사용법: manager-notebook [healthcheck|version]\n", os.Args[1])
-			os.Exit(2)
 		}
 	}
-	if err := run(); err != nil {
+	o, err := parseOptions(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n\n%s", err, usageText)
+		os.Exit(2)
+	}
+	if err := run(o); err != nil {
 		log.Printf("시작하지 못했습니다: %v", err)
+		waitBeforeClose(runtime.GOOS)
 		os.Exit(1)
 	}
 }
@@ -72,16 +78,51 @@ func setupTZ() {
 	}
 }
 
-func run() error {
+func run(o options) error {
 	setupTZ()
 	log.SetFlags(log.LstdFlags)
-	addr := getenv("NOTEBOOK_ADDR", ":8080")
-	dataDir := getenv("NOTEBOOK_DATA_DIR", "/data")
+	plan, err := makePlan(runtime.GOOS, os.Getenv, o)
+	if err != nil {
+		return err
+	}
 	password := os.Getenv("NOTEBOOK_PASSWORD") // not trimmed: spaces are allowed
 
-	st, err := store.Open(dataDir)
+	// Listen first: if a notebook already runs on this PC, open it instead of
+	// starting a second copy on the same data.
+	ln, port, err := listenPlan(plan)
+	var running errAlreadyRunning
+	if errors.As(err, &running) {
+		fmt.Printf("%s을 브라우저로 엽니다: %s\n", running.Error(), localURL(running.port))
+		if plan.openBrowser {
+			if berr := openBrowser(runtime.GOOS, localURL(running.port)); berr != nil {
+				fmt.Printf("브라우저를 열지 못했습니다. 위 주소를 직접 여세요.\n")
+			}
+		}
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("데이터 폴더(%s)를 열 수 없습니다. 볼륨이 붙어 있고 쓸 수 있는지 확인하세요: %w", dataDir, err)
+		return err
+	}
+
+	var st *store.Store
+	if plan.demo {
+		st, err = store.OpenMemory()
+		if err == nil {
+			err = demo.Seed(context.Background(), st, time.Now())
+		}
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("체험 모드 예시 데이터를 만들지 못했습니다: %w", err)
+		}
+	} else {
+		st, err = store.Open(plan.dataDir)
+		if err != nil {
+			ln.Close()
+			if plan.desktop {
+				return fmt.Errorf("데이터 폴더(%s)를 열 수 없습니다. 쓸 수 있는 폴더인지 확인하거나 --data 로 다른 폴더를 주세요: %w", plan.dataDir, err)
+			}
+			return fmt.Errorf("데이터 폴더(%s)를 열 수 없습니다. 볼륨이 붙어 있고 쓸 수 있는지 확인하세요: %w", plan.dataDir, err)
+		}
 	}
 	defer st.Close()
 
@@ -122,6 +163,7 @@ func run() error {
 		LLM:      client,
 		Guide:    g,
 		Web:      web,
+		Demo:     plan.demo,
 	})
 	if srv.AuthEnabled() {
 		log.Printf("로그인 켜짐 (NOTEBOOK_PASSWORD 있음)")
@@ -133,7 +175,6 @@ func run() error {
 	}
 
 	hs := &http.Server{
-		Addr:              addr,
 		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -147,9 +188,21 @@ func run() error {
 	defer stop()
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("manager-notebook %s 시작: %s (데이터: %s)", version, addr, dataDir)
-		errCh <- hs.ListenAndServe()
+		where := plan.dataDir
+		if plan.demo {
+			where = "메모리(체험 모드)"
+		}
+		log.Printf("manager-notebook %s 시작: %s (데이터: %s)", version, ln.Addr(), where)
+		errCh <- hs.Serve(ln)
 	}()
+	if plan.desktop {
+		printDesktopBanner(os.Stdout, plan, port, version)
+		if plan.openBrowser {
+			if err := openBrowser(runtime.GOOS, localURL(port)); err != nil {
+				log.Printf("브라우저를 열지 못했습니다(%v). %s 을 직접 여세요.", err, localURL(port))
+			}
+		}
+	}
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {

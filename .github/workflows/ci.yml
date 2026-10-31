@@ -1,0 +1,100 @@
+# main 에 올리거나 PR 을 열 때 시험만 합니다(아무것도 올리지 않음).
+# 태그를 올리기 전에 Windows 실행 파일이 실제 Windows 에서 도는지 여기서 먼저 확인합니다.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Go·화면 계산 시험
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet / go test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: node --test
+        env:
+          TZ: Asia/Seoul
+        run: node --test web/test/
+
+  windows:
+    name: Windows 실행 파일 만들기
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache: true
+
+      - name: Build zips
+        run: bash scripts/build-windows.sh 0.0.0-ci dist
+
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-dist-ci
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  windows-smoke:
+    name: Windows 에서 실행 시험
+    needs: windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Download
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-dist-ci
+          path: dist
+
+      - name: Smoke (amd64)
+        shell: pwsh
+        run: |
+          Expand-Archive -Path "dist/manager-notebook-0.0.0-ci-windows-amd64.zip" -DestinationPath "nbexe"
+          pwsh -File scripts/smoke-windows.ps1 -Exe "nbexe/manager-notebook.exe" -Expected "0.0.0-ci"
