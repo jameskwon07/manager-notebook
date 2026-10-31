@@ -178,6 +178,13 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: var(--s-1); }
 @media (min-width: 900px) { .edit-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
 .est { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .say { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 0 6px 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--s-1); }
+/* 접수함: 요청자 화면에 보이는 것·보류/종료 이유 */
+.req-out { padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); }
+.req-out label { display: grid; gap: 4px; }
+.req-out .mono { overflow-wrap: anywhere; min-width: 0; }
+.req-adds { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.req-adds li { overflow-wrap: anywhere; white-space: pre-wrap; border-left: 2px solid var(--grid); padding-left: 8px; }
+.req-reason { border-top: 1px dashed var(--rule); padding-top: 8px; max-width: 70ch; }
 
 /* 자리 막대 */
 .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }

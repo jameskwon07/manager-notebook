@@ -87,7 +87,7 @@ try {
   $st = Invoke-RestMethod "http://127.0.0.1:18090/api/state"
   Check "체험 모드 표시" ($st.demo -eq $true)
   Check "예시 프로그램 7개" ($st.programs.Count -eq 7) "$($st.programs.Count)"
-  Check "예시 요청 7건" ($st.requests.Count -eq 7) "$($st.requests.Count)"
+  Check "예시 요청 8건" ($st.requests.Count -eq 8) "$($st.requests.Count)"
   Stop-Nb $p5; $p5 = $null
   Check "체험 모드는 기본 데이터를 건드리지 않음" ((Get-Item $defDb).LastWriteTimeUtc -eq $before)
 
@@ -110,6 +110,8 @@ try {
   Check "창구로 요청 보냄" ($sent.code -match '^[a-z0-9]{10}$') ($sent | ConvertTo-Json -Compress)
   $st6 = Invoke-RestMethod "http://127.0.0.1:18091/api/state"
   Check "보낸 요청이 접수함에 들어옴" (@($st6.requests | Where-Object { $_.askCode -eq $sent.code -and $_.via -eq "창구" }).Count -eq 1)
+  $wd = Post-Json "http://127.0.0.1:18191/api/ask/$($sent.code)/withdraw" @{ text = "시험 취소" }
+  Check "창구에서 요청 취소(상태는 담당자 것 그대로)" ([bool]$wd.withdrawnAt -and $wd.status -eq "접수" -and $wd.canWithdraw -eq $false) ($wd | ConvertTo-Json -Compress)
   $mainL = @(Get-NetTCPConnection -LocalPort 18091 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress })
   $doorL = @(Get-NetTCPConnection -LocalPort 18191 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress })
   Check "수첩은 127.0.0.1 에서만" (($mainL.Count -gt 0) -and -not ($mainL | Where-Object { $_ -ne "127.0.0.1" })) ($mainL -join ",")

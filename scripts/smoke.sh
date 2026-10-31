@@ -771,7 +771,7 @@ if [[ $MODE == docker ]]; then
     req GET /api/state
     expect_status 200 "체험 모드 GET /api/state"
     expect "d.get('demo') is True" "state.demo = true"
-    expect "len(d.get('programs') or []) == 7 and len(d.get('requests') or []) == 7" "예시 프로그램 7개·요청 7건"
+    expect "len(d.get('programs') or []) == 7 and len(d.get('requests') or []) == 8" "예시 프로그램 7개·요청 8건"
     expect "(d.get('settings') or {}).get('people') and len(d['settings']['people']) == 4" "예시 사람 4명(A~D)"
     expect "d.get('only') == 'intake'" "--only intake 이면 state.only = intake"
     req GET /
@@ -799,7 +799,7 @@ if [[ $MODE == docker ]]; then
     printf '%s' '{"what":"창구 시험 요청","from":"시험","when":"금요일, 점검 일정"}' >"$T/ask.json"
     req POST /api/ask "$T/ask.json"
     expect_status 201 "창구 POST /api/ask"
-    expect "re.fullmatch(r'[2-9a-hjkmnp-z]{10}', d.get('code','')) and d.get('status') == '접수' and d.get('missing') == ['why','check','program'] and d.get('editable') is True" "  접수 링크 코드·상태·빈칸"
+    expect "re.fullmatch(r'[2-9a-hjkmnp-z]{10}', d.get('code','')) and d.get('status') == '접수' and d.get('missing') == ['why','check'] and d.get('editable') is True" "  접수 링크 코드·상태·빈칸(프로그램은 담당자가 고름)"
     ASK_CODE=$(val "d.get('code','')")
     printf '%s' '{"what":"x"}' >"$T/ask.json"
     req POST /api/docs/requests "$T/ask.json"
@@ -809,7 +809,9 @@ if [[ $MODE == docker ]]; then
     printf '%s' '{"why":"팀장 지시","more":"덧붙임 시험"}' >"$T/ask.json"
     req PATCH "/api/ask/$ASK_CODE" "$T/ask.json"
     expect_status 200 "창구 PATCH /api/ask/<code>(빈칸 채우기)"
-    expect "d.get('why') == '팀장 지시' and '[덧붙임' in d.get('raw','') and d.get('addedAt')" "  채운 칸과 덧붙임"
+    expect "d.get('why') == '팀장 지시' and d.get('raw') == '' and [a.get('text') for a in d.get('adds') or []] == ['덧붙임 시험'] and d.get('addedAt') and d.get('filledAt')" "  채운 칸과 덧붙임(원문이 아니라 adds 에)"
+    req GET /api/ask/form
+    expect "d.get('holidays') is None and d.get('owner') == '' and d.get('notice') == '' and 'settings' not in d and 'people' not in t" "  창구 form: 쉬는 날·받는 사람·알림만(설정 통째로 아님)"
     req GET "/r/$ASK_CODE"
     expect_status 200 "창구 GET /r/<code>"
     req GET /api/ask/zzzzzzzzzz
@@ -817,9 +819,36 @@ if [[ $MODE == docker ]]; then
     REQ_PORT=8080
     req GET /api/state
     expect "len([r for r in d.get('requests') or [] if r.get('askCode') == '$ASK_CODE' and r.get('via') == '창구' and r.get('why') == '팀장 지시']) == 1" "창구로 보낸 요청이 수첩 접수함에 들어옴"
+    ASK_ID=$(val "[r['id'] for r in d.get('requests') or [] if r.get('askCode') == '$ASK_CODE'][0]")
+    # 담당자가 수첩에서 메모·리드 추정·남길 말·알린 날짜를 적고 리드에게 넘김 → 요청자에게는 남길 말·날짜·단계만 보임
+    printf '%s' '{"note":"SMOKE-MEMO-비공개","est":{"max":3},"size":"L","reply":"담당 리드가 맡았습니다.","replyAt":"2026-11-02T01:00:00.000Z","eta":"2026-11-20","status":"리드 전달","statusAt":"2026-11-02T01:00:00.000Z","forwardedAt":"2026-11-02T01:00:00.000Z"}' >"$T/ask.json"
+    req PATCH "/api/docs/requests/$ASK_ID" "$T/ask.json"
+    expect_status 200 "수첩에서 남길 말·알린 날짜·리드 전달"
+    REQ_PORT=8180
+    req GET "/api/ask/$ASK_CODE"
+    expect "d.get('reply') == '담당 리드가 맡았습니다.' and d.get('eta') == '2026-11-20' and d.get('status') == '리드 전달' and d.get('editable') is False and d.get('canConfirm') is True" "  요청자 화면: 남길 말·알린 날짜·단계"
+    expect "'SMOKE-MEMO' not in t and 'est' not in d and 'size' not in d and 'note' not in d" "  요청자 화면에 메모·리드 추정·크기는 없음"
+    printf '%s' '{"check":"x"}' >"$T/ask.json"
+    req PATCH "/api/ask/$ASK_CODE" "$T/ask.json"
+    expect_status 409 "넘긴 뒤에는 빈칸을 바꿀 수 없음"
+    printf '%s' '{"more":"넘긴 뒤 덧붙임"}' >"$T/ask.json"
+    req PATCH "/api/ask/$ASK_CODE" "$T/ask.json"
+    expect_status 200 "넘긴 뒤에도 덧붙임은 됨"
+    printf '%s' '{"ok":true}' >"$T/ask.json"
+    req POST "/api/ask/$ASK_CODE/done" "$T/ask.json"
+    expect_status 200 "창구 POST /api/ask/<code>/done(끝남 확인)"
+    expect "d.get('doneOkAt') and d.get('status') == '리드 전달'" "  끝남 확인은 status 를 바꾸지 않음(담당자가 완료로)"
+    printf '%s' '{"text":"다른 방법으로 해결"}' >"$T/ask.json"
+    req POST "/api/ask/$ASK_CODE/withdraw" "$T/ask.json"
+    expect_status 200 "창구 POST /api/ask/<code>/withdraw(취소)"
+    expect "d.get('withdrawnAt') and d.get('canWithdraw') is False and d.get('canAdd') is False" "  취소한 뒤에는 덧붙임·취소 없음"
+    REQ_PORT=8080
+    req GET /api/state
+    expect "[(r.get('status'), bool(r.get('withdrawnAt')), bool(r.get('doneOkAt')), len(r.get('adds') or [])) for r in d.get('requests') or [] if r.get('id') == '$ASK_ID'] == [('리드 전달', True, True, 3)]" "수첩: 취소·끝남 확인·덧붙임 3개, status 는 담당자 것 그대로"
     docker logs "$APP_DEMO" >"$T/demolog" 2>&1 || true
     if grep -q "$ASK_CODE" "$T/demolog"; then bad "로그에 창구 링크 코드가 남음"; else ok "로그에 창구 링크 코드 없음"; fi
-    if grep -q '창구 POST /api/ask 201' "$T/demolog"; then ok "로그에 창구 요청의 모양만 남음"; else bad "창구 로그 줄이 없음" "$(tail -5 "$T/demolog")"; fi
+    if grep -q '창구 POST /api/ask 201' "$T/demolog" && grep -q '창구 POST /api/ask/{code}/withdraw 200' "$T/demolog"; then ok "로그에 창구 요청의 모양만 남음"; else bad "창구 로그 줄이 없음" "$(tail -5 "$T/demolog")"; fi
+    if grep -q 'SMOKE-MEMO\|다른 방법으로 해결' "$T/demolog"; then bad "로그에 요청 내용이 남음"; else ok "로그에 요청 내용 없음"; fi
   fi
   docker rm -f "$APP_DEMO" "$APP_DEMO-curl" >/dev/null 2>&1 || true
   HELPER=$SAVED_HELPER

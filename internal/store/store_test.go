@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -97,6 +98,52 @@ func TestPatchNullDeletes(t *testing.T) {
 	}
 	if _, err := s.Patch(ctx, "blockers", "missing", Doc{"a": 1}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("patch missing: %v", err)
+	}
+}
+
+func TestUpdateIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	d, _ := s.Create(ctx, "requests", Doc{"what": "x", "adds": []any{}})
+	id := d["id"].(string)
+
+	// 여러 고루틴이 동시에 덧붙여도 하나도 잃지 않습니다(읽기·검사·쓰기가 한 트랜잭션).
+	var wg sync.WaitGroup
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := s.Update(ctx, "requests", id, func(cur Doc) (Doc, error) {
+				list, _ := cur["adds"].([]any)
+				cur["adds"] = append(list, map[string]any{"n": i})
+				return cur, nil
+			})
+			if err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	got, _ := s.Get(ctx, "requests", id)
+	if n := len(got["adds"].([]any)); n != 30 {
+		t.Fatalf("adds = %d, want 30", n)
+	}
+
+	stop := errors.New("stop")
+	if _, err := s.Update(ctx, "requests", id, func(cur Doc) (Doc, error) {
+		cur["what"] = "바뀌면 안 됨"
+		return nil, stop
+	}); !errors.Is(err, stop) {
+		t.Fatalf("fn error not returned: %v", err)
+	}
+	if got, _ := s.Get(ctx, "requests", id); got["what"] != "x" {
+		t.Fatalf("aborted update wrote: %v", got["what"])
+	}
+	if _, err := s.Update(ctx, "requests", "missing", func(cur Doc) (Doc, error) { return cur, nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	if _, err := s.Update(ctx, "nope", id, func(cur Doc) (Doc, error) { return cur, nil }); !errors.Is(err, ErrBadColl) {
+		t.Fatalf("bad coll: %v", err)
 	}
 }
 

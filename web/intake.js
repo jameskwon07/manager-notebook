@@ -1,6 +1,8 @@
 /* 요청 접수함 — 관리 수첩의 한 기능판.
  * 하는 일은 하나입니다: 받은 요청을 7칸으로 정리하고, 빈칸만 되묻고, 근무일 2일 안에 담당 리드에게 넘깁니다.
  * 7칸은 요청자가 요청 창구(ask.html, 따로 연 포트)에 직접 적습니다. 여기서 옮겨 적는 것은 말로 받은 요청뿐입니다.
+ * 요청자는 자기 링크에서 '지금 누구 차례인지'·넘길 날·보류 이유·알린 날짜를 봅니다. 그래서 보류·진행 안 함으로 바꿀 때는
+ * 이유를 하나 골라야 저장되고, 요청자의 소식(빈칸 채움·덧붙임·취소·끝남 확인)은 알약 하나로 보입니다.
  * 계산(근무일 시계·빈칸·문장)은 web/core.js(NBCore)를 그대로 쓰고, 저장은 전체 수첩과 같은 REST API를 씁니다.
  * CSP: 인라인 스크립트·style 속성을 쓰지 않습니다.
  */
@@ -8,7 +10,8 @@
   "use strict";
   var K = window.NBCore;
   var STATUSES = ["접수", "정리 중", "리드 전달", "진행", "완료", "보류", "종료"];
-  var S = { raw: {}, settings: {}, requests: [], programs: [], filter: "open", open: null, ready: false, loaded: false, demo: false, only: "", version: "", auth: false, leaving: false, ask: { on: false, urls: [] }, seen: null };
+  var S = { raw: {}, settings: {}, requests: [], programs: [], filter: "open", open: null, ready: false, loaded: false, demo: false, only: "", version: "", auth: false, leaving: false, ask: { on: false, urls: [] }, seen: null, reason: null };
+  var NEWS_CLS = { crit: "crit", good: "good", info: "info" };
 
   /* ---------- 작은 도우미 ---------- */
   function $(id) { return document.getElementById(id); }
@@ -100,11 +103,16 @@
     S.auth = st.auth === true;
     var ask = st.ask && typeof st.ask === "object" ? st.ask : {};
     S.ask = { on: ask.on === true, port: ask.port || 0, urls: Array.isArray(ask.urls) ? ask.urls.filter(function (u) { return typeof u === "string" && u; }) : [] };
-    /* 창구로 새 요청이 들어오면 알립니다(처음 읽을 때는 빼고). */
-    var ids = {}, fresh = 0;
-    S.requests.forEach(function (r) { ids[r.id] = 1; if (S.seen && !S.seen[r.id] && r.via === "창구") fresh++; });
+    /* 창구로 새 요청이 들어오거나 요청자가 무언가 남기면 알립니다(처음 읽을 때는 빼고). */
+    var ids = {}, fresh = 0, news = 0;
+    S.requests.forEach(function (r) {
+      ids[r.id] = r.addedAt || "";
+      if (!S.seen) return;
+      if (!(r.id in S.seen)) { if (r.via === "창구") fresh++; }
+      else if ((r.addedAt || "") !== S.seen[r.id] && K.askNews(r)) news++;
+    });
     S.seen = ids;
-    if (fresh) toast("창구로 새 요청 " + fresh + "건이 들어왔습니다.");
+    if (fresh || news) toast([fresh ? "창구로 새 요청 " + fresh + "건이 들어왔습니다." : "", news ? "요청자 소식 " + news + "건(빈칸 채움·덧붙임·취소·끝남 확인)이 있습니다." : ""].filter(Boolean).join(" "));
     S.loaded = true;
     storeNote(""); setReady(true);
     render();
@@ -142,7 +150,8 @@
     $("ib-counts").replaceChildren(
       box(k.open, "열린 요청"),
       box(k.over, "기한 넘김", k.over ? "crit" : ""),
-      box(k.blanks, "빈칸 있음", k.blanks ? "warn" : ""));
+      box(k.blanks, "빈칸 있음", k.blanks ? "warn" : ""),
+      box(k.news, "요청자 소식", k.news ? "warn" : ""));
     document.title = (k.over ? "(" + k.over + ") " : "") + "요청 접수함";
   }
 
@@ -247,7 +256,7 @@
   }
 
   /* ---------- 받은 요청 ---------- */
-  ["open", "all", "done"].forEach(function (f) { $("ib-f-" + f).addEventListener("click", function () { S.filter = f; S.open = null; render(); }); });
+  ["open", "all", "done"].forEach(function (f) { $("ib-f-" + f).addEventListener("click", function () { S.filter = f; S.open = null; S.reason = null; render(); }); });
 
   function clockPill(r, k) {
     if (k) return pill(k.state === "over" ? "crit" : k.state === "soon" ? "warn" : "good", k.text);
@@ -266,27 +275,81 @@
     });
     return b;
   }
+  /* 화면의 r이 오래된 사본일 수 있어(편집을 연 동안은 새로 읽지 않음), 복사한 뒤 새로 읽어 요청자가 그사이 남긴 것이 있는지 봅니다. */
+  function freshSince(r) {
+    return refresh().then(function () {
+      var cur = S.requests.filter(function (x) { return x.id === r.id; })[0];
+      return { cur: cur, moved: !!cur && ((cur.addedAt || "") !== (r.addedAt || "") || (cur.withdrawnAt || "") !== (r.withdrawnAt || "")) };
+    });
+  }
   function askNow(r, pn) {
-    var p = { askedAt: new Date().toISOString() }, base = doorBase();
+    var nowIso = new Date().toISOString(), p = { askedAt: nowIso }, base = doorBase();
     var link = base ? K.askLink(base, codeFor(r, p)) : "";
     copyText(K.askText(r, pn, link), link ? "되묻기 문장을 복사했습니다. 빈칸을 채울 링크가 들어 있습니다." : "되묻기 문장을 복사했습니다. 메신저에 붙여 넣으세요.");
-    if ((r.status || "접수") === "접수") p.status = "정리 중";
-    upd("requests", r.id, p);
+    freshSince(r).then(function (f) {
+      if (!f.cur) return;
+      if (f.moved) { toast("요청자가 방금 무언가 남겼습니다. 복사한 문장은 보내지 말고, 확인한 뒤 다시 눌러 주세요."); return; }
+      if ((f.cur.status || "접수") === "접수") Object.assign(p, K.statusPatch(f.cur, "정리 중", nowIso));
+      upd("requests", r.id, p);
+    });
   }
   function statusLinkNow(r) {
     var p = {}, link = K.askLink(doorBase(), codeFor(r, p));
     copyText(K.statusLinkText(r, link), "진행 링크 문장을 복사했습니다.");
     if (p.askCode) upd("requests", r.id, p);
   }
+  /* 복사는 클릭 안에서 먼저 하고, 넘기기 전에 새로 읽어 요청자가 그사이 취소했는지 봅니다. */
   function handNow(r, pn) {
     copyText(K.handoffText(r, pn), "넘길 문장을 복사했습니다.");
     var st = r.status || "접수";
-    if (st === "접수" || st === "정리 중") {
-      upd("requests", r.id, K.statusPatch(r, "리드 전달", new Date().toISOString())).then(function () {
-        toast("넘길 문장을 복사하고 '리드 전달'로 바꿨습니다. 전달 시계가 멈춥니다.");
-      });
-    }
+    if (st !== "접수" && st !== "정리 중") return;
+    S.reason = null;
+    freshSince(r).then(function (f) {
+      var cur = f.cur;
+      if (!cur) return;
+      if (cur.withdrawnAt) { toast("요청자가 취소한 요청입니다. 복사한 문장은 보내지 마세요."); return; }
+      if (f.moved) { toast("요청자가 방금 무언가 남겼습니다. 복사한 문장은 보내지 말고, 확인한 뒤 다시 눌러 주세요."); return; }
+      var p = K.statusPatch(cur, "리드 전달", new Date().toISOString());
+      if (cur.addedAt) p.seenAt = new Date().toISOString(); /* 넘길 문장에 덧붙임이 들어 있음 */
+      upd("requests", r.id, p).then(function () { toast("넘길 문장을 복사하고 '리드 전달'로 바꿨습니다. 전달 시계가 멈춥니다."); });
+    });
   }
+  /* 보류·종료: 요청자 링크가 있으면 이유를 하나 골라야 저장됩니다. 저장하면서 알림 문장을 복사합니다. */
+  function needsReason(r, next) { return (next === "보류" || next === "종료") && K.ASK_CODE_RE.test(String(r.askCode || "")); }
+  function setStatus(r, next) {
+    if (next === (r.status || "접수")) return;
+    if (needsReason(r, next)) { S.reason = { id: r.id, status: next, pick: "", extra: "" }; render(); var el = $("ib-reason-" + r.id); if (el) el.focus(); return; }
+    S.reason = null;
+    var p = K.statusPatch(r, next, new Date().toISOString());
+    upd("requests", r.id, p).then(function () { if (p.forwardedAt) toast("리드에게 넘긴 것으로 적었습니다. 전달 시계가 멈춥니다."); });
+  }
+  function reasonRow(r) {
+    var next = S.reason.status, list = next === "보류" ? K.HOLD_REASONS : K.CLOSE_REASONS;
+    if (r.withdrawnAt) list = [K.CANCEL_REASON].concat(list);
+    /* 리드가 맡은 뒤라면 '빈칸 답'을 까닭으로 고를 일이 없습니다. */
+    if (K.leadHas(r)) list = list.filter(function (x) { return x !== K.HOLD_REASONS[0] && x !== K.CLOSE_REASONS[2]; });
+    /* 고른 이유·덧붙일 말은 S.reason에 두어, 다시 그려도(다른 줄의 고치기 등) 사라지지 않게 합니다. */
+    var sel = h("select", { id: "ib-reason-" + r.id, "aria-label": "이유" });
+    fillSelect(sel, list.map(function (x) { return [x, x]; }), S.reason.pick || list[0]);
+    sel.addEventListener("change", function () { S.reason.pick = sel.value; });
+    var extra = h("input", { type: "text", autocomplete: "off", maxlength: "300", "aria-label": "덧붙일 말", placeholder: next === "보류" ? "덧붙일 말(선택). 예: 12/8 사이클 시작 때 다시 봅니다" : "덧붙일 말(선택). 예: 합친 요청 이름" });
+    extra.value = S.reason.extra || "";
+    extra.addEventListener("input", function () { S.reason.extra = extra.value; });
+    var ok = h("button", { cls: "btn sm primary", type: "button", text: next + "(으)로 바꾸고 알림 문장 복사" });
+    ok.addEventListener("click", function () {
+      var nowIso = new Date().toISOString(), reply = K.stripNames(trimJoin(sel.value, extra.value)).text;
+      var p = Object.assign(K.statusPatch(r, next, nowIso), { reply: reply, replyAt: nowIso });
+      var base = doorBase(), link = base ? K.askLink(base, r.askCode) : "";
+      copyText(K.replyText(Object.assign({}, r, p), link), "알림 문장을 복사했습니다. 요청자 화면에도 이유가 보입니다.");
+      S.reason = null;
+      upd("requests", r.id, p);
+    });
+    var cancel = h("button", { cls: "btn sm quiet", type: "button", text: "그만두기", onclick: function () { S.reason = null; render(); } });
+    return h("div", { cls: "ib-reason" },
+      h("p", { cls: "label", text: "요청자에게 보일 이유(링크를 받은 누구나 봅니다)" }), sel, extra, h("div", { cls: "row" }, ok, cancel),
+      next === "종료" ? h("p", { cls: "ex", text: "거절은 팀장과 정한 뒤에만 알립니다." }) : null);
+  }
+  function trimJoin(a, b) { return [String(a || "").trim(), String(b || "").trim()].filter(Boolean).join(" "); }
   function field(r, key, label, el) { return h("label", { cls: key === "raw" || key === "what" ? "wide" : null }, h("span", { text: label }), el); }
   function input(r, key, ph) {
     var el = h("input", { type: "text", autocomplete: "off", placeholder: ph || "", "data-key": key }); el.value = r[key] || "";
@@ -294,6 +357,7 @@
     return el;
   }
   function editor(r, pn) {
+    var door = r.via === "창구";
     var raw = h("textarea", { rows: 3 }); raw.value = r.raw || "";
     raw.addEventListener("change", function () { upd("requests", r.id, { raw: K.stripNames(raw.value).text }); });
     var from = h("input", { type: "text", autocomplete: "off", list: "ib-roles-list", placeholder: "이름이나 역할" }); from.value = r.from || "";
@@ -302,58 +366,109 @@
     prog.addEventListener("change", function () { upd("requests", r.id, { program: prog.value }); });
     var size = h("select"); fillSelect(size, [["S", "S 반나절 이하"], ["M", "M 1~5일"], ["L", "L 사이클급"]], r.size || "M");
     size.addEventListener("change", function () { upd("requests", r.id, { size: size.value }); });
-    var recv = h("input", { type: "datetime-local" }); recv.value = localInput(r.receivedAt);
+    /* 창구로 온 요청의 받은 때는 서버가 적은 사실이라 고치지 않습니다(요청자 화면의 넘길 날이 여기서 나옵니다). */
+    var recv = h("input", { type: "datetime-local", disabled: door, title: door ? "창구로 받은 때는 고칠 수 없습니다" : null }); recv.value = localInput(r.receivedAt);
     recv.addEventListener("change", function () { var iso = fromLocal(recv.value); if (iso) upd("requests", r.id, { receivedAt: iso }); });
     var urgent = h("input", { type: "checkbox" }); urgent.checked = !!r.urgent;
     urgent.addEventListener("change", function () { upd("requests", r.id, { urgent: urgent.checked }); });
     var form = h("div", { cls: "form" },
       field(r, "what", "무엇(한 줄)", input(r, "what")),
-      field(r, "raw", r.via === "창구" ? "자세히(요청자가 적은 것)" : "자세히", raw),
+      field(r, "raw", door ? "자세히(요청자가 적은 것)" : "자세히(요청자에게 보이지 않음)", raw),
       field(r, "from", "보낸 분", from),
       field(r, "program", "어느 프로그램", prog),
       field(r, "size", "크기", size),
       field(r, "why", "왜·누가 결정", input(r, "why", "모르면 비워 둡니다")),
       field(r, "when", "언제까지와 이유", input(r, "when")),
       field(r, "check", "확인 방법", input(r, "check")),
-      field(r, "recv", "받은 때", recv),
+      field(r, "recv", door ? "받은 때(창구가 적음)" : "받은 때", recv),
       h("label", { cls: "check" }, urgent, h("span", { text: "긴급(리드가 바로 처리)" })));
     var miss = K.missing(r), base = doorBase(), link = base && r.askCode ? K.askLink(base, r.askCode) : "";
     return h("div", { cls: "ib-edit" }, form,
       h("p", { cls: "label", text: miss.length ? "되묻기 문장(빈칸만)" : "되물을 빈칸이 없습니다" }),
       miss.length ? h("div", { cls: "say", text: K.askText(r, pn, link) }) : null,
-      base ? h("div", { cls: "row" }, h("span", { cls: "label", text: "요청자 진행 링크" }), link ? h("span", { cls: "mono", text: link }) : null,
-        h("button", { cls: "btn sm", type: "button", text: "진행 링크 문장 복사", onclick: function () { statusLinkNow(r); } })) : null,
+      outward(r, base, link),
       h("p", { cls: "label", text: "리드에게 넘길 문장" }), h("div", { cls: "say", text: K.handoffText(r, pn) }),
       h("div", { cls: "row between" },
         h("span", { cls: "ex tnum", text: [r.askedAt ? "되물음 " + fmtDT(r.askedAt) : "", r.forwardedAt ? "넘김 " + fmtDT(r.forwardedAt) : "", r.closedAt ? "닫음 " + fmtDT(r.closedAt) : ""].filter(Boolean).join(" · ") }),
-        twoStep("지우기", function () { S.open = null; del("requests", r.id).then(function () { toast("요청을 지웠습니다."); }); }, "danger")));
+        twoStep(r.askCode ? "지우기(요청자 링크도 사라짐)" : "지우기", function () { S.open = null; del("requests", r.id).then(function () { toast("요청을 지웠습니다."); }); }, "danger")));
+  }
+  /* 요청자 화면에 보이는 것: 남길 말·알린 날짜·덧붙임. 메모·크기·리드 추정은 보이지 않습니다. */
+  function outward(r, base, link) {
+    var reply = h("textarea", { rows: 2, maxlength: "500", placeholder: "예: 담당 리드가 맡았습니다. 다음 주에 시험판을 보여 드립니다." }); reply.value = r.reply || "";
+    reply.addEventListener("change", function () {
+      var t = K.stripNames(reply.value).text;
+      upd("requests", r.id, t ? { reply: t, replyAt: new Date().toISOString() } : { reply: null, replyAt: null });
+    });
+    var eta = h("input", { type: "date" }); eta.value = /^\d{4}-\d{2}-\d{2}$/.test(String(r.eta || "")) ? r.eta : "";
+    var far = h("span", { cls: "ex" });
+    function farNote() {
+      var v = eta.value, c = calNow(), n = v ? c.workdaysBetween(new Date(), K.parseYmd(v)) : 0;
+      far.textContent = n > 10 ? "근무일 10일(2주)을 넘는 날짜는 팀장 결재 뒤에 알립니다." : "";
+    }
+    farNote();
+    eta.addEventListener("change", function () {
+      farNote();
+      upd("requests", r.id, eta.value ? { eta: eta.value, etaAt: new Date().toISOString() } : { eta: null, etaAt: null });
+    });
+    var adds = K.reqAdds(r), relay = r.forwardedAt ? K.addsText(r, r.forwardedAt) : "";
+    var view = link ? h("a", { cls: "btn sm", href: link, target: "_blank", rel: "noopener", text: "요청자 화면으로 보기" }) : null;
+    /* 웹 체험판은 요청자 화면이 같은 페이지에 있어 그쪽으로 바꿉니다(NBD_openDoor). */
+    if (view) view.addEventListener("click", function (e) { if (typeof window.NBD_openDoor === "function") { e.preventDefault(); window.NBD_openDoor(r.askCode); } });
+    return h("div", { cls: "ib-out" },
+      h("p", { cls: "label", text: "요청자 화면에 보이는 것" }),
+      h("p", { cls: "ex", text: "요청자 링크에는 무엇·보낸 분·왜·언제까지·확인 방법·프로그램" + (r.via === "창구" ? "·자세히" : "") + "과 아래 두 칸이 보입니다. 크기·긴급·메모는 보이지 않습니다." }),
+      h("label", null, h("span", { text: "요청자에게 남길 말(링크를 받은 누구나 봅니다)" }), reply),
+      r.reply && !K.replyNow(r) ? h("p", { cls: "ex", text: "이 말은 지금 단계 전에 남긴 것이라 요청자 화면에는 보이지 않습니다. 고쳐 적으면 다시 보입니다." }) : null,
+      h("div", { cls: "row" }, h("label", { cls: "ib-eta" }, h("span", { text: "알린 날짜(담당 리드가 가늠한 최대값)" }), eta),
+        h("button", { cls: "btn sm", type: "button", text: "날짜 알림 문장 복사", onclick: function () {
+          if (!eta.value) { toast("먼저 날짜를 고르세요."); eta.focus(); return; }
+          copyText(K.etaText(Object.assign({}, r, { eta: eta.value }), link), "날짜 알림 문장을 복사했습니다.");
+        } }), far),
+      adds.length ? h("div", { cls: "ib-adds" }, h("p", { cls: "label", text: "요청자가 덧붙인 말" }),
+        h("ul", null, adds.map(function (a) { return h("li", null, h("span", { cls: "ex tnum", text: fmtDT(a.at) + (a.kind === "cancel" ? " · 취소하며" : a.kind === "notyet" ? " · 아직 다름" : "") }), " ", a.text); })),
+        relay ? h("div", { cls: "row" }, h("button", { cls: "btn sm", type: "button", text: "넘긴 뒤 덧붙임을 리드에게 전할 문장 복사", onclick: function () { copyText(relay, "리드에게 전할 문장을 복사했습니다."); } })) : null) : null,
+      base ? h("div", { cls: "row" }, link ? h("span", { cls: "mono", text: link }) : null, view,
+        h("button", { cls: "btn sm", type: "button", text: "진행 링크 문장 복사", onclick: function () { statusLinkNow(r); } })) : null);
   }
   function item(r, now, c) {
     var k = K.reqClock(r, now, c), miss = K.missing(r), open = K.isOpenReq(r), pn = progName(r.program), editing = S.open === r.id;
     var st = r.status || "접수", early = st === "접수" || st === "정리 중";
-    var status = h("select", { "aria-label": "상태" }); fillSelect(status, STATUSES.map(function (s) { return [s, s]; }), st);
-    status.addEventListener("change", function () {
-      var p = K.statusPatch(r, status.value, new Date().toISOString());
-      upd("requests", r.id, p).then(function () { if (p.forwardedAt) toast("리드에게 넘긴 것으로 적었습니다. 전달 시계가 멈춥니다."); });
-    });
+    var pick = S.reason && S.reason.id === r.id ? S.reason.status : st;
+    var status = h("select", { "aria-label": "상태" }); fillSelect(status, STATUSES.map(function (s) { return [s, s]; }), pick);
+    status.addEventListener("change", function () { if (S.reason && S.reason.id === r.id && status.value === st) { S.reason = null; render(); return; } setStatus(r, status.value); });
+    var news = K.askNews(r), es = K.etaState(r, now, c);
+    var newsB = news && news.kind === "doneok" ? h("button", { cls: "btn sm primary", type: "button", text: "완료로", onclick: function () { S.reason = null; upd("requests", r.id, K.statusPatch(r, "완료", new Date().toISOString())); } })
+      : news && news.kind === "cancel" && news.level === "crit" ? h("button", { cls: "btn sm", type: "button", text: "리드에게 알렸으면 종료로", onclick: function () {
+        var nowIso = new Date().toISOString();
+        S.reason = null;
+        upd("requests", r.id, Object.assign(K.statusPatch(r, "종료", nowIso), { reply: K.CANCEL_REASON, replyAt: nowIso, seenAt: nowIso }));
+      } }) : null;
     var askB = open && early && miss.length && !r.urgent
       ? h("button", { cls: "btn sm primary", type: "button", text: "되묻기 문장 복사", onclick: function () { askNow(r, pn); } }) : null;
     var handB = open && (early || r.urgent)
       ? h("button", { cls: "btn sm" + (askB ? "" : " primary"), type: "button", text: early ? "넘길 문장 복사 · 리드 전달로" : "넘길 문장 복사", onclick: function () { if (early) handNow(r, pn); else copyText(K.handoffText(r, pn), "넘길 문장을 복사했습니다."); } }) : null;
-    var editB = h("button", { cls: "btn sm quiet", type: "button", "aria-expanded": editing ? "true" : "false", text: editing ? "고치기 닫기" : "고치기", onclick: function () { S.open = editing ? null : r.id; render(); } });
+    var editB = h("button", { cls: "btn sm quiet", type: "button", "aria-expanded": editing ? "true" : "false", text: editing ? "고치기 닫기" : "고치기", onclick: function () {
+      S.open = editing ? null : r.id;
+      /* 연 것으로 요청자 소식을 본 것으로 칩니다(넘긴 뒤 취소처럼 꼭 처리할 것은 닫을 때까지 남음). */
+      if (!editing && news && news.unseen) upd("requests", r.id, { seenAt: new Date().toISOString() });
+      else render();
+    } });
     return h("li", { cls: "ib-item " + (k ? k.state : "") + (open ? "" : " closed"), "data-id": r.id },
       h("div", { cls: "ib-row1" }, clockPill(r, k), h("span", { cls: "ib-what", text: K.reqTitle(r) }), r.urgent ? pill("on", "긴급") : null,
         r.via === "창구" ? pill("on", "창구") : null,
-        r.addedAt && early && (!r.askedAt || r.addedAt > r.askedAt) ? pill("good", "요청자가 보탬 " + fmtDay(r.addedAt)) : r.askedAt && early ? pill("info", "되물음 " + fmtDay(r.askedAt)) : null),
+        news ? pill(NEWS_CLS[news.level] || "info", news.text) : r.askedAt && early && open ? pill("info", "되물음 " + fmtDay(r.askedAt)) : null,
+        es === "past" ? pill("warn", "알린 날짜 지남") : es === "soon" ? pill("info", "알린 날짜 내일") : null,
+        K.replyNow(r) && (st === "보류" || st === "종료") ? h("span", { cls: "ex", text: "이유: " + K.replyNow(r) }) : null),
       h("div", { cls: "ib-meta ex tnum", text: [r.from || "보낸 분 미정", pn || "프로그램 미정", r.size || "", "받음 " + fmtDT(r.receivedAt)].filter(Boolean).join(" · ") }),
       r.raw && r.raw.trim() !== K.reqTitle(r) && !editing ? h("div", { cls: "ib-raw", text: r.raw }) : null,
       open && !r.urgent ? h("div", { cls: "ib-gaps" }, miss.length ? [h("span", { cls: "ex", text: "빈칸" })].concat(miss.map(function (m) { return pill("warn", m); })) : pill("good", "빈칸 없음")) : null,
-      h("div", { cls: "ib-actions" }, status, askB, handB, editB),
+      h("div", { cls: "ib-actions" }, status, newsB, askB, handB, editB),
+      S.reason && S.reason.id === r.id ? reasonRow(r) : null,
       editing ? editor(r, pn) : null);
   }
   function renderList(now) {
     ["open", "all", "done"].forEach(function (f) { $("ib-f-" + f).setAttribute("aria-pressed", S.filter === f ? "true" : "false"); });
-    var c = calNow(), list = K.intakeView(S.requests, S.filter, now, c), ul = $("ib-list");
+    var c = calNow(), list = K.intakeView(S.requests, S.filter, now, c, S.open || (S.reason && S.reason.id)), ul = $("ib-list");
     ul.replaceChildren.apply(ul, list.map(function (r) { return item(r, now, c); }));
     if (!list.length) ul.append(h("li", { cls: "empty", text: S.requests.length ? "이 보기에는 요청이 없습니다." : doorBase() ? "아직 받은 요청이 없습니다. 위 링크를 요청자에게 주면, 요청자가 적어 보낸 것이 여기 바로 들어옵니다." : "아직 받은 요청이 없습니다. 요청 창구를 열거나, 말로 받은 요청은 '직접 적기'로 적으세요." }));
   }
@@ -383,6 +498,12 @@
     if (v && !/^https?:\/\/[^\s\/]+/i.test(v)) { toast("http:// 로 시작하는 주소를 적어 주세요. 예: http://10.0.0.5:8180/"); return; }
     putSettings({ askUrl: v }).then(function () { toast(v ? "창구 주소를 저장했습니다." : "창구 주소를 자동으로 되돌렸습니다."); });
   });
+  [["ib-askowner", "askOwner", 60, "창구에 보일 이름을 저장했습니다."], ["ib-asknotice", "askNotice", 300, "창구 알림을 저장했습니다."]].forEach(function (x) {
+    $(x[0]).addEventListener("change", function () {
+      var v = $(x[0]).value.trim().slice(0, x[2]), p = {}; p[x[1]] = v;
+      putSettings(p).then(function () { toast(v ? x[3] : "지웠습니다."); });
+    });
+  });
   $("ib-roles").addEventListener("change", function () { var r = lines($("ib-roles").value); putSettings({ requesterRoles: r.length ? r : K.REQUESTER_ROLES.slice() }).then(function () { toast("요청자 역할을 저장했습니다."); }); });
   $("ib-hol").addEventListener("change", function () { putSettings({ holidays: $("ib-hol").value }).then(function () { toast("쉬는 날을 저장했습니다. 근무일 시계에 바로 반영됩니다."); }); });
   (function () {
@@ -403,6 +524,8 @@
     if (document.activeElement !== $("ib-roles")) $("ib-roles").value = roles().join("\n");
     if (document.activeElement !== $("ib-hol")) $("ib-hol").value = S.settings.holidays || "";
     if (document.activeElement !== $("ib-askurl")) { $("ib-askurl").value = S.settings.askUrl || ""; $("ib-askurl").placeholder = S.ask.urls[0] ? "자동: " + S.ask.urls[0] : "자동"; }
+    if (document.activeElement !== $("ib-askowner")) $("ib-askowner").value = typeof S.raw.askOwner === "string" ? S.raw.askOwner : "";
+    if (document.activeElement !== $("ib-asknotice")) $("ib-asknotice").value = typeof S.raw.askNotice === "string" ? S.raw.askNotice : "";
     renderPrograms();
     $("ib-full").hidden = S.only === "intake";
   }
@@ -422,10 +545,10 @@
     $("ib-foot").replaceChildren.apply($("ib-foot"), foot);
   }
   /* 다른 탭에 있다가 돌아오면 바로 새로 읽습니다. */
-  document.addEventListener("visibilitychange", function () { if (!document.hidden && S.loaded && !S.open) refresh(); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && S.loaded && !S.open && !S.reason) refresh(); });
   /* 창구로 들어온 요청과 근무일 시계를 30초마다 새로 읽어 그립니다. 고치거나 적는 중에는 건드리지 않습니다. */
   setInterval(function () {
-    if (!S.loaded || S.open || document.hidden) return;
+    if (!S.loaded || S.open || S.reason || document.hidden) return;
     var a = document.activeElement;
     if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
     refresh();

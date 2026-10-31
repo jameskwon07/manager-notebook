@@ -3,9 +3,15 @@ package server
 // 요청 창구(ask door): 요청자가 직접 요청을 적어 보내는 작은 화면과 API.
 //
 // 관리 수첩과 다른 포트로 따로 열고, 같은 망의 누구나 열 수 있습니다.
-// 이 핸들러에는 '요청 보내기'와 '내 요청 보기·빈칸 채우기' 말고는 길이
-// 없습니다. 수첩 화면·/api/state·내보내기 같은 것은 이 포트로 닿지 않습니다.
-// 비밀번호를 켜 두어도 창구는 로그인 없이 열립니다(창구가 하는 일이 그것).
+// 이 핸들러에는 '요청 보내기'와 '내 요청 보기·빈칸 채우기·덧붙이기·취소·
+// 끝남 확인' 말고는 길이 없습니다. 수첩 화면·/api/state·내보내기 같은 것은
+// 이 포트로 닿지 않습니다. 비밀번호를 켜 두어도 창구는 로그인 없이 열립니다.
+//
+// 칸마다 쓰는 쪽이 하나입니다. 창구(요청자)는 처음 적는 칸, 빈 칸 채우기,
+// adds·filledAt·addedAt·withdrawnAt·doneOkAt·doneNoAt만 씁니다. status·
+// reply·eta 같은 나머지는 수첩(담당자)만 씁니다. 그래서 담당자 화면이 오래된
+// 사본으로 저장해도 요청자가 쓴 것이 지워지지 않습니다. 창구의 쓰기는 모두
+// Store.Update 한 트랜잭션 안에서 검사하고 씁니다.
 
 import (
 	"crypto/rand"
@@ -30,6 +36,8 @@ import (
 const (
 	AskMaxBody   = 32 << 10
 	AskDailyCap  = 300 // 창구로 하루에 받는 요청 수(전체)
+	AskMaxAdds   = 20  // 요청 하나에 덧붙일 수 있는 글 수
+	askReplyMax  = 500 // 요청자에게 보이는 담당자의 말(글자)
 	askCodeLen   = 10
 	askCodeChars = "23456789abcdefghjkmnpqrstuvwxyz" // 헷갈리는 0·1·i·l·o 뺌
 	askWindow    = 10 * time.Minute
@@ -40,7 +48,7 @@ const (
 var askLimits = map[string]int{"post": 30, "patch": 60, "get": 300, "miss": 60}
 
 // Field length limits in characters.
-var askFieldMax = map[string]int{"what": 120, "from": 60, "why": 500, "when": 500, "check": 500, "raw": 4000, "more": 1000}
+var askFieldMax = map[string]int{"what": 120, "from": 60, "why": 500, "when": 500, "check": 500, "raw": 4000, "more": 1000, "text": 1000}
 
 var askCodeRe = regexp.MustCompile(`^[` + askCodeChars + `]{` + fmt.Sprint(askCodeLen) + `}$`)
 
@@ -109,6 +117,8 @@ func NewAsk(cfg AskConfig) *Ask {
 	m.HandleFunc("POST /api/ask", a.create)
 	m.HandleFunc("GET /api/ask/{code}", a.view)
 	m.HandleFunc("PATCH /api/ask/{code}", a.add)
+	m.HandleFunc("POST /api/ask/{code}/withdraw", a.withdraw)
+	m.HandleFunc("POST /api/ask/{code}/done", a.done)
 	m.HandleFunc("GET /r/{code}", a.page)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "없는 주소입니다.")
@@ -154,6 +164,11 @@ func (a *Ask) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func askLogPath(p string) string {
 	switch {
 	case strings.HasPrefix(p, "/api/ask/") && p != "/api/ask/form":
+		for _, act := range []string{"/withdraw", "/done"} {
+			if strings.HasSuffix(p, act) {
+				return "/api/ask/{code}" + act
+			}
+		}
 		return "/api/ask/{code}"
 	case strings.HasPrefix(p, "/r/"):
 		return "/r/{code}"
@@ -241,7 +256,7 @@ func cleanField(key, s string) string {
 
 func tooLong(key, s string) bool { return utf8.RuneCountInString(s) > askFieldMax[key] }
 
-var askFieldNames = map[string]string{"what": "무엇", "from": "보내는 분", "why": "왜·누가 정했는지", "when": "언제까지와 이유", "check": "확인 방법", "raw": "자세히", "more": "덧붙임"}
+var askFieldNames = map[string]string{"what": "무엇", "from": "보내는 분", "why": "왜·누가 정했는지", "when": "언제까지와 이유", "check": "확인 방법", "raw": "자세히", "more": "덧붙임", "text": "적은 말"}
 
 // newAskCode returns a random code for a requester's link.
 func newAskCode() string {
@@ -319,16 +334,80 @@ func str(d store.Doc, k string) string {
 	return ""
 }
 
-// editable: the requester may still fill blanks before the request goes to a lead.
+// askGapKeys are the blanks a requester is asked to fill. Which program it
+// belongs to is the receiver's call, so it is not one of them.
+var askGapKeys = []string{"why", "when", "check"}
+
+var (
+	askDateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	askDayRe  = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
+)
+
+func closedStatus(d store.Doc) bool { st := str(d, "status"); return st == "완료" || st == "종료" }
+
+// editable: the requester may fill blanks until the request goes to a lead
+// (also while it is on hold, so an unanswered request can be picked up again).
 func editable(d store.Doc) bool {
 	if u, _ := d["urgent"].(bool); u {
 		return false
 	}
-	st := str(d, "status")
-	return (st == "" || st == "접수" || st == "정리 중") && str(d, "forwardedAt") == ""
+	if str(d, "forwardedAt") != "" || str(d, "withdrawnAt") != "" {
+		return false
+	}
+	switch str(d, "status") {
+	case "", "접수", "정리 중", "보류":
+		return true
+	}
+	return false
 }
 
-// publicView is what a requester sees for their own request: no manager notes, no estimates.
+func askAdds(d store.Doc) []map[string]any {
+	list, _ := d["adds"].([]any)
+	out := make([]map[string]any, 0, len(list))
+	for _, x := range list {
+		m, ok := x.(map[string]any)
+		if !ok {
+			continue
+		}
+		at, _ := m["at"].(string)
+		text, _ := m["text"].(string)
+		kind, _ := m["kind"].(string)
+		if text == "" {
+			continue
+		}
+		out = append(out, map[string]any{"at": at, "text": text, "kind": kind})
+	}
+	return out
+}
+
+// canAdd: a note can be added at any stage (also after it is done or closed,
+// to say "this is not what I asked" or "please look again"), unless withdrawn.
+func canAdd(d store.Doc) bool {
+	return str(d, "withdrawnAt") == "" && len(askAdds(d)) < AskMaxAdds
+}
+
+func canWithdraw(d store.Doc) bool { return str(d, "withdrawnAt") == "" && !closedStatus(d) }
+
+// canConfirm: once a lead has it, the requester can say it is done (or not yet).
+func canConfirm(d store.Doc) bool {
+	if str(d, "withdrawnAt") != "" || str(d, "status") == "종료" {
+		return false
+	}
+	st := str(d, "status")
+	return str(d, "forwardedAt") != "" || st == "진행" || st == "완료"
+}
+
+func clipRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
+}
+
+// publicView is what a requester sees for their own request. It is an allow
+// list: the receiver's memo, size, lead estimate, urgency and 'absorbed' never
+// leave the notebook. The detail text is shown only for requests that came in
+// through the door (a typed-in request's detail may hold someone else's words).
 func (a *Ask) publicView(r *http.Request, d store.Doc) map[string]any {
 	progName := ""
 	if id := str(d, "program"); id != "" {
@@ -340,26 +419,36 @@ func (a *Ask) publicView(r *http.Request, d store.Doc) map[string]any {
 			}
 		}
 	}
-	var miss []string
-	for _, k := range []string{"why", "when", "check", "program"} {
+	miss := []string{}
+	for _, k := range askGapKeys {
 		if strings.TrimSpace(str(d, k)) == "" {
 			miss = append(miss, k)
 		}
-	}
-	if miss == nil {
-		miss = []string{}
 	}
 	st := str(d, "status")
 	if st == "" {
 		st = "접수"
 	}
+	raw := ""
+	if str(d, "via") == "창구" {
+		raw = str(d, "raw")
+	}
+	eta := str(d, "eta")
+	if !askDateRe.MatchString(eta) {
+		eta = ""
+	}
 	return map[string]any{
-		"code": str(d, "askCode"), "what": str(d, "what"), "raw": str(d, "raw"), "from": str(d, "from"),
+		"code": str(d, "askCode"), "what": str(d, "what"), "raw": raw, "from": str(d, "from"),
 		"why": str(d, "why"), "when": str(d, "when"), "check": str(d, "check"),
 		"program": str(d, "program"), "programName": progName,
-		"status": st, "receivedAt": str(d, "receivedAt"), "forwardedAt": str(d, "forwardedAt"),
-		"closedAt": str(d, "closedAt"), "addedAt": str(d, "addedAt"),
-		"missing": miss, "editable": editable(d),
+		"status": st, "statusAt": str(d, "statusAt"), "receivedAt": str(d, "receivedAt"),
+		"askedAt": str(d, "askedAt"), "forwardedAt": str(d, "forwardedAt"), "heldAt": str(d, "heldAt"),
+		"closedAt": str(d, "closedAt"), "filledAt": str(d, "filledAt"), "addedAt": str(d, "addedAt"),
+		"withdrawnAt": str(d, "withdrawnAt"), "doneOkAt": str(d, "doneOkAt"), "doneNoAt": str(d, "doneNoAt"), "reopenedAt": str(d, "reopenedAt"),
+		"reply": clipRunes(strings.TrimSpace(str(d, "reply")), askReplyMax), "replyAt": str(d, "replyAt"),
+		"eta": eta, "etaAt": str(d, "etaAt"),
+		"adds": askAdds(d), "missing": miss,
+		"editable": editable(d), "canAdd": canAdd(d), "canWithdraw": canWithdraw(d), "canConfirm": canConfirm(d),
 	}
 }
 
@@ -374,13 +463,45 @@ func (a *Ask) form(w http.ResponseWriter, r *http.Request) {
 	if ps == nil {
 		ps = []askProgram{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"version": a.cfg.Version, "demo": a.cfg.Demo, "programs": ps, "limits": askFieldMax})
+	// 설정은 통째로 내보내지 않습니다. 창구에 필요한 세 가지만 꺼냅니다.
+	set, err := a.cfg.Store.Settings(r.Context())
+	if err != nil {
+		a.storeErr(w, err)
+		return
+	}
+	// 쉬는 날은 날짜만 내보냅니다('2026-11-12 건강검진'의 이름은 이 PC 밖으로 나가지 않음).
+	// 적은 적이 없으면 null: 화면이 기본 공휴일을 씁니다(수첩과 같은 규칙).
+	var holidays any
+	if h, ok := set["holidays"].(string); ok {
+		holidays = strings.Join(askDayRe.FindAllString(h, -1), "\n")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version": a.cfg.Version, "demo": a.cfg.Demo, "programs": ps, "limits": askFieldMax,
+		"owner":    clipRunes(strings.TrimSpace(str(set, "askOwner")), 60),
+		"notice":   clipRunes(strings.TrimSpace(str(set, "askNotice")), 300),
+		"holidays": holidays,
+	})
 }
 
+const askNotFoundMsg = "이 링크의 요청을 찾지 못했습니다. 링크 끝이 잘렸거나, 담당자가 지운 요청일 수 있습니다."
+
+// askErr is a refusal decided inside a Store.Update transaction.
+type askErr struct {
+	status    int
+	code, msg string
+}
+
+func (e *askErr) Error() string { return e.code }
+
 func (a *Ask) storeErr(w http.ResponseWriter, err error) {
+	var ae *askErr
+	if errors.As(err, &ae) {
+		writeErr(w, ae.status, ae.code, ae.msg)
+		return
+	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeErr(w, http.StatusNotFound, "not_found", "이 링크의 요청을 찾지 못했습니다. 링크를 끝까지 복사했는지 확인해 주세요.")
+		writeErr(w, http.StatusNotFound, "not_found", askNotFoundMsg)
 	case errors.Is(err, store.ErrLimit):
 		writeErr(w, http.StatusConflict, "limit", "접수함이 가득 찼습니다. 담당자에게 직접 알려 주세요.")
 	default:
@@ -475,7 +596,7 @@ func (a *Ask) create(w http.ResponseWriter, r *http.Request) {
 	doc := store.Doc{
 		"raw": f["raw"], "what": f["what"], "from": f["from"], "program": f["program"], "size": "",
 		"why": f["why"], "when": f["when"], "check": f["check"], "urgent": false,
-		"status": "접수", "receivedAt": now, "askedAt": nil, "forwardedAt": nil, "closedAt": nil, "heldAt": nil,
+		"status": "접수", "statusAt": now, "receivedAt": now, "askedAt": nil, "forwardedAt": nil, "closedAt": nil, "heldAt": nil,
 		"absorbed": false, "absorbedAt": nil, "est": nil, "note": "", "createdAt": now,
 		"via": "창구", "askCode": code, "addedAt": nil,
 	}
@@ -493,7 +614,7 @@ func (a *Ask) lookup(w http.ResponseWriter, r *http.Request) (store.Doc, bool) {
 			tooMany(w)
 			return nil, false
 		}
-		writeErr(w, http.StatusNotFound, "not_found", "이 링크의 요청을 찾지 못했습니다. 링크를 끝까지 복사했는지 확인해 주세요.")
+		writeErr(w, http.StatusNotFound, "not_found", askNotFoundMsg)
 		return nil, false
 	}
 	d, err := a.findByCode(r, code)
@@ -520,9 +641,43 @@ func (a *Ask) view(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.publicView(r, d))
 }
 
-// add lets the requester fill blanks (why, when, check, program) and append a
-// note while the request has not gone to a lead yet. Empty values are ignored,
-// so a requester can never erase what is already there.
+var (
+	errLocked    = &askErr{http.StatusConflict, "locked", "담당 리드에게 넘어간 뒤에는 처음 적은 칸을 바꿀 수 없습니다. 바뀐 것은 덧붙임에 적어 주세요."}
+	errWithdrawn = &askErr{http.StatusConflict, "withdrawn", "취소한 요청입니다. 다시 필요하면 새로 보내 주세요."}
+	errFullAdds  = &askErr{http.StatusConflict, "too_many_adds", "이 요청에는 더 덧붙일 수 없습니다(20개까지). 새 요청으로 보내 주세요."}
+	errEmpty     = &askErr{http.StatusBadRequest, "empty", "채운 칸이 없습니다."}
+	errClosed    = &askErr{http.StatusConflict, "closed", "닫힌 요청이라 빈칸을 채울 수 없습니다. 다시 봐 주셨으면 하는 것은 덧붙임에 적어 주세요."}
+)
+
+func appendAdd(d store.Doc, at, text, kind string) {
+	list, _ := d["adds"].([]any)
+	e := map[string]any{"at": at, "text": text}
+	if kind != "" {
+		e["kind"] = kind
+	}
+	d["adds"] = append(list, e)
+}
+
+// update runs fn on the request with this code inside one transaction and
+// answers with the requester's view.
+func (a *Ask) update(w http.ResponseWriter, r *http.Request, d store.Doc, fn func(cur store.Doc, now string) error) {
+	out, err := a.cfg.Store.Update(r.Context(), "requests", str(d, "id"), func(cur store.Doc) (store.Doc, error) {
+		if str(cur, "askCode") != str(d, "askCode") {
+			return nil, store.ErrNotFound
+		}
+		return cur, fn(cur, a.nowISO())
+	})
+	if err != nil {
+		a.storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.publicView(r, out))
+}
+
+// add lets the requester fill blanks (why, when, check, program) while the
+// request has not gone to a lead, and add a note at any stage. A blank is
+// filled only if it is still empty, so a requester never overwrites what the
+// receiver wrote. Notes go to adds, never into raw (which the receiver edits).
 func (a *Ask) add(w http.ResponseWriter, r *http.Request) {
 	if !a.allow(r, "patch") {
 		tooMany(w)
@@ -536,10 +691,6 @@ func (a *Ask) add(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !editable(d) {
-		writeErr(w, http.StatusConflict, "locked", "이미 담당 리드에게 넘어간 요청이라 여기서는 고칠 수 없습니다. 담당자에게 직접 알려 주세요.")
-		return
-	}
 	if ok, err := a.validProgram(r, f["program"]); err != nil {
 		a.storeErr(w, err)
 		return
@@ -547,33 +698,137 @@ func (a *Ask) add(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_program", "고른 프로그램이 목록에 없습니다. 화면을 새로 고친 뒤 다시 골라 주세요.")
 		return
 	}
-	patch := store.Doc{}
-	for _, k := range []string{"why", "when", "check", "program"} {
-		if v := f[k]; v != "" && v != str(d, k) {
-			patch[k] = v
-		}
+	fills := f["why"] != "" || f["when"] != "" || f["check"] != "" || f["program"] != ""
+	if !fills && f["more"] == "" {
+		writeErr(w, errEmpty.status, errEmpty.code, errEmpty.msg)
+		return
 	}
-	if more := f["more"]; more != "" {
-		raw := str(d, "raw")
-		stamp := a.cfg.Now().Format("1/2 15:04")
-		next := strings.TrimSpace(raw + "\n\n[덧붙임 " + stamp + "] " + more)
-		if utf8.RuneCountInString(next) > askFieldMax["raw"]+askFieldMax["more"] {
-			writeErr(w, http.StatusBadRequest, "too_long", "덧붙인 글이 너무 많습니다. 담당자에게 직접 알려 주세요.")
+	a.update(w, r, d, func(cur store.Doc, now string) error {
+		if str(cur, "withdrawnAt") != "" {
+			return errWithdrawn
+		}
+		if fills && !editable(cur) {
+			if closedStatus(cur) && str(cur, "forwardedAt") == "" {
+				return errClosed
+			}
+			return errLocked
+		}
+		changed, filled := false, false
+		for _, k := range []string{"why", "when", "check", "program"} {
+			if v := f[k]; v != "" && strings.TrimSpace(str(cur, k)) == "" {
+				cur[k] = v
+				changed, filled = true, true
+			}
+		}
+		if more := f["more"]; more != "" {
+			if !canAdd(cur) {
+				return errFullAdds
+			}
+			appendAdd(cur, now, more, "")
+			changed = true
+		}
+		if !changed {
+			return errEmpty
+		}
+		if filled {
+			cur["filledAt"] = now
+		}
+		cur["addedAt"] = now
+		return nil
+	})
+}
+
+// withdraw records that the requester no longer needs it. The door never
+// writes status: before forwarding the notebook treats a withdrawn request as
+// closed; after forwarding the receiver tells the lead and closes it.
+func (a *Ask) withdraw(w http.ResponseWriter, r *http.Request) {
+	if !a.allow(r, "patch") {
+		tooMany(w)
+		return
+	}
+	d, ok := a.lookup(w, r)
+	if !ok {
+		return
+	}
+	f, ok := a.readFields(w, r, "text")
+	if !ok {
+		return
+	}
+	a.update(w, r, d, func(cur store.Doc, now string) error {
+		if str(cur, "withdrawnAt") != "" {
+			return nil // 두 번 눌러도 한 번
+		}
+		if closedStatus(cur) {
+			return &askErr{http.StatusConflict, "closed", "이미 끝났거나 진행하지 않기로 한 요청이라 취소할 것이 없습니다."}
+		}
+		cur["withdrawnAt"] = now
+		cur["addedAt"] = now
+		if t := f["text"]; t != "" && len(askAdds(cur)) < AskMaxAdds {
+			appendAdd(cur, now, t, "cancel")
+		}
+		return nil
+	})
+}
+
+// done lets the requester say the work is done ({"ok":true}) or not yet
+// ({"ok":false,"text":"…"}) once a lead has it.
+func (a *Ask) done(w http.ResponseWriter, r *http.Request) {
+	if !a.allow(r, "patch") {
+		tooMany(w)
+		return
+	}
+	d, ok := a.lookup(w, r)
+	if !ok {
+		return
+	}
+	var in map[string]any
+	if err := decodeBody(w, r, AskMaxBody, &in); err != nil {
+		bodyErr(w, err)
+		return
+	}
+	yes, isBool := in["ok"].(bool)
+	if !isBool {
+		writeErr(w, http.StatusBadRequest, "bad_field", "ok 칸은 true 또는 false여야 합니다.")
+		return
+	}
+	text := ""
+	if v, has := in["text"]; has && v != nil {
+		s, isStr := v.(string)
+		if !isStr {
+			writeErr(w, http.StatusBadRequest, "bad_field", "적은 말 칸은 글자여야 합니다.")
 			return
 		}
-		patch["raw"] = next
+		if text = cleanField("text", s); tooLong("text", text) {
+			writeErr(w, http.StatusBadRequest, "too_long", fmt.Sprintf("적은 말 칸은 %d자까지입니다.", askFieldMax["text"]))
+			return
+		}
 	}
-	if len(patch) == 0 {
-		writeErr(w, http.StatusBadRequest, "empty", "채운 칸이 없습니다.")
+	if !yes && text == "" {
+		writeErr(w, http.StatusBadRequest, "need_text", "무엇이 다른지 한 줄 적어 주세요.")
 		return
 	}
-	patch["addedAt"] = a.nowISO()
-	out, err := a.cfg.Store.Patch(r.Context(), "requests", str(d, "id"), patch)
-	if err != nil {
-		a.storeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, a.publicView(r, out))
+	a.update(w, r, d, func(cur store.Doc, now string) error {
+		if !canConfirm(cur) {
+			if str(cur, "withdrawnAt") != "" {
+				return errWithdrawn
+			}
+			if str(cur, "status") == "종료" {
+				return &askErr{http.StatusConflict, "closed", "진행하지 않기로 한 요청이라 알릴 것이 없습니다. 다시 필요하면 새로 보내 주세요."}
+			}
+			return &askErr{http.StatusConflict, "not_yet", "담당 리드에게 넘어간 뒤에 알려 주실 수 있습니다."}
+		}
+		if yes {
+			cur["doneOkAt"] = now
+		} else {
+			if !canAdd(cur) {
+				return errFullAdds
+			}
+			cur["doneNoAt"] = now
+			appendAdd(cur, now, text, "notyet")
+		}
+		cur["addedAt"] = now
+		return nil
+	})
 }
 
 func (a *Ask) page(w http.ResponseWriter, r *http.Request) {

@@ -344,6 +344,52 @@ func (s *Store) Patch(ctx context.Context, coll, id string, p Doc) (Doc, error) 
 	return cur, nil
 }
 
+// Update reads coll/id, passes it to fn and writes what fn returns, all in
+// one transaction, so a check made inside fn cannot go stale before the
+// write. If fn returns an error nothing is written and that error is
+// returned. If fn returns the same map unchanged it is still written.
+func (s *Store) Update(ctx context.Context, coll, id string, fn func(cur Doc) (Doc, error)) (Doc, error) {
+	if !ValidColl(coll) {
+		return nil, ErrBadColl
+	}
+	if !ValidID(id) {
+		return nil, ErrBadID
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var data string
+	err = tx.QueryRowContext(ctx, `SELECT data FROM docs WHERE coll=? AND id=?`, coll, id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	cur, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+	next, err := fn(cur)
+	if err != nil {
+		return nil, err
+	}
+	out, err := encode(id, next)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE docs SET data=?, updated_at=? WHERE coll=? AND id=?`,
+		out, s.stamp(), coll, id); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
 // Get returns coll/id or ErrNotFound.
 func (s *Store) Get(ctx context.Context, coll, id string) (Doc, error) {
 	var data string

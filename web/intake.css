@@ -35,6 +35,13 @@
 .ib-edit { border-top: 1px dashed var(--rule); padding-top: 10px; display: grid; gap: 10px; }
 .ib-edit .say { max-height: 14em; overflow: auto; }
 .ib-edit .row .mono { overflow-wrap: anywhere; min-width: 0; }
+.ib-reason { border-top: 1px dashed var(--rule); padding-top: 10px; display: grid; gap: 6px; }
+.ib-reason select { width: 100%; max-width: 100%; }
+.ib-out { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); }
+.ib-out label { display: grid; gap: 4px; }
+.ib-out .ib-eta { flex: 0 1 auto; }
+.ib-adds ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ib-adds li { overflow-wrap: anywhere; white-space: pre-wrap; border-left: 2px solid var(--grid); padding-left: 8px; }
 
 .ib-settings > summary { cursor: pointer; font-weight: 700; }
 .ib-settings[open] > summary { margin-bottom: 4px; }

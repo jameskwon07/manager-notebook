@@ -460,7 +460,8 @@ test("askText: 빈칸만 묻고, 사람 이름 없이 일반 문장", () => {
   assert.match(s, /2가지만 여쭙니다/);
   assert.match(s, /1\) 언제까지 필요한지와 그 이유\n2\) 끝났다는 것을 어떻게 확인하면 되는지/);
   assert.doesNotMatch(s, /왜 필요한지/);
-  assert.match(s, /근무일 2일 안에 회신/);
+  assert.match(s, /근무일 2일 안에 담당 리드에게 넘깁니다/);
+  assert.doesNotMatch(s, /회신/); // 약속은 '넘기기' 하나뿐(날짜는 리드가 가늠한 뒤)
   const none = K.askText({ what: "x", why: "a", when: "b", check: "c", program: "p" }, "");
   assert.match(none, /빈칸이 없어/);
   assert.match(K.askText({ raw: "원문 첫 줄\n둘째 줄" }), /"원문 첫 줄"/);
@@ -667,17 +668,19 @@ test("intakeCounts: 열린 요청·기한 넘김·빈칸 있는 접수", () => {
     { status: "진행", urgent: true, receivedAt: D(2026, 11, 4, 8).toISOString() },                            // 긴급: 빈칸 셈에서 뺌
     { status: "완료", receivedAt: D(2026, 10, 1).toISOString() },
   ];
-  assert.deepEqual(K.intakeCounts(reqs, now, c), { open: 3, over: 1, blanks: 1 });
+  assert.deepEqual(K.intakeCounts(reqs, now, c), { open: 3, over: 1, blanks: 1, news: 0 });
 });
 
 test("statusPatch: 리드 전달·끝남·보류 시각을 처음 한 번만 적고, 되돌리면 지운다", () => {
   const now = "2026-11-04T06:00:00.000Z";
-  assert.deepEqual(K.statusPatch({ status: "정리 중" }, "리드 전달", now), { status: "리드 전달", forwardedAt: now });
-  assert.deepEqual(K.statusPatch({ status: "리드 전달", forwardedAt: "x" }, "리드 전달", now), { status: "리드 전달" });
-  assert.deepEqual(K.statusPatch({ status: "진행" }, "완료", now), { status: "완료", closedAt: now });
-  assert.deepEqual(K.statusPatch({ status: "완료", closedAt: "x" }, "진행", now), { status: "진행", closedAt: null });
-  assert.deepEqual(K.statusPatch({ status: "정리 중" }, "보류", now), { status: "보류", heldAt: now });
-  assert.deepEqual(K.statusPatch({ status: "보류", heldAt: "x" }, "정리 중", now), { status: "정리 중", heldAt: null });
+  assert.deepEqual(K.statusPatch({ status: "정리 중" }, "리드 전달", now), { status: "리드 전달", statusAt: now, forwardedAt: now });
+  assert.deepEqual(K.statusPatch({ status: "리드 전달", forwardedAt: "x", statusAt: "x" }, "리드 전달", now), { status: "리드 전달" });
+  assert.deepEqual(K.statusPatch({ status: "진행", statusAt: "x" }, "완료", now), { status: "완료", statusAt: now, closedAt: now });
+  assert.deepEqual(K.statusPatch({ status: "완료", closedAt: "x" }, "진행", now), { status: "진행", statusAt: now, closedAt: null, reopenedAt: now });
+  assert.deepEqual(K.statusPatch({ status: "정리 중" }, "보류", now), { status: "보류", statusAt: now, heldAt: now });
+  assert.deepEqual(K.statusPatch({ status: "보류", heldAt: "x" }, "정리 중", now), { status: "정리 중", statusAt: now, heldAt: null });
+  // 상태가 없던 옛 요청은 '접수'로 봅니다. statusAt이 없으면 같은 단계라도 적어 둡니다.
+  assert.deepEqual(K.statusPatch({}, "접수", now), { status: "접수", statusAt: now });
 });
 
 test("parseAskTemplate: 요청자가 채워 보낸 양식을 칸으로 나눈다", () => {
@@ -723,12 +726,15 @@ test("요청 창구 문장: 되묻기에 링크, 링크 안내, 진행 링크", 
   assert.equal(link, "http://10.0.0.5:8180/r/abcdefghjk");
   assert.equal(K.askLink("", "abcdefghjk"), "");
   const ask = K.askText({ what: "버튼", why: "w" }, "로그 수집기", link);
-  assert.match(ask, /3가지만 여쭙니다/);
+  assert.match(ask, /2가지만 여쭙니다/); // 링크가 있으면 어느 프로그램은 묻지 않음(요청자 화면과 같게)
+  assert.doesNotMatch(ask, /어느 프로그램/);
+  assert.match(K.askText({ what: "버튼", why: "w" }, ""), /3가지만 여쭙니다/); // 링크 없이 메신저로 물을 때는 그대로
   assert.ok(ask.endsWith("이 링크에서 바로 채워 주시면 됩니다(진행 상황도 여기서 보입니다): " + link));
   assert.ok(!K.askText({ what: "버튼" }, "").includes("링크"));
   const full = K.askText({ what: "버튼", why: "w", when: "x", check: "y", program: "p" }, "로그 수집기", link);
   assert.ok(full.endsWith("진행 상황은 이 링크에서 보실 수 있습니다: " + link));
   assert.ok(K.inviteText("http://10.0.0.5:8180/").endsWith("\nhttp://10.0.0.5:8180/"));
+  assert.match(K.inviteText("u"), /^번거로우시겠지만 .*근무일 2일 안에 담당 리드에게 넘기고/);
   assert.equal(K.statusLinkText({ what: "버튼" }, link), "\"버튼\" 요청의 진행 상황은 이 링크에서 보실 수 있습니다: " + link);
 });
 
@@ -748,5 +754,204 @@ test("askStage: 요청자에게 보이는 단계", () => {
   assert.equal(K.askStage("리드 전달").label, "리드에게 넘김");
   assert.equal(K.askStage("완료").step, 4);
   assert.equal(K.askStage("보류").step, -1);
+  assert.equal(K.askStage("보류").label, "보류");
+  assert.equal(K.askStage("종료").label, "진행 안 함");
   assert.equal(K.ASK_STEPS.length, 5);
+});
+
+/* ---------- 요청자에게 보이는 진행 ---------- */
+const at = (y, m, d, h = 10, mi = 0) => new Date(y, m - 1, d, h, mi).toISOString();
+
+test("askNow: 빈칸이 있으면 요청자 차례이고, 늦음을 말하지 않는다", () => {
+  const c = K.cal("");
+  const v = { status: "정리 중", receivedAt: at(2026, 10, 26), askedAt: at(2026, 10, 27), what: "x", missing: ["when", "check"] };
+  const n = K.askNow(v, D(2026, 11, 20, 10), c); // 받은 지 한참 지났어도
+  assert.equal(n.who, "me");
+  assert.equal(n.whoLabel, "요청하신 분 차례");
+  assert.equal(n.label, "답을 기다림");
+  assert.equal(n.late, false);
+  assert.equal(n.due, null);
+  assert.match(n.lines[0], /^10\/27\(화\)에 담당자가 빈칸 2개를 여쭸습니다\(언제까지와 이유 \/ 확인 방법\)\.$/);
+  assert.match(n.lines[2], /^11\/10\(화\)까지 답이 없으면 보류해 둡니다\.$/); // 되물은 때부터 근무일 10일
+  // 어느 프로그램인지는 요청자의 빈칸이 아닙니다.
+  assert.equal(K.askNow({ status: "접수", receivedAt: at(2026, 11, 2), why: "a", when: "b", check: "c" }, D(2026, 11, 2, 11), c).who, "desk");
+});
+
+test("askNow: 담당자 차례면 넘길 날(날짜만)을 말하고, 마지막 빈칸이 채워진 때부터 센다", () => {
+  const c = K.cal("");
+  const base = { status: "정리 중", receivedAt: at(2026, 11, 2, 16, 37), why: "a", when: "b", check: "c", missing: [] };
+  let n = K.askNow(base, D(2026, 11, 3, 9), c);
+  assert.equal(n.who, "desk");
+  assert.equal(n.lines[0], "11/4(수)까지 담당 리드에게 넘깁니다.");
+  assert.equal(n.late, false);
+  assert.equal(n.lines[1], K.DATE_PROMISE);
+  // 요청자가 목요일에 빈칸을 채웠으면 그때부터 근무일 2일(다음 주 월요일)
+  n = K.askNow(Object.assign({}, base, { filledAt: at(2026, 11, 5, 14) }), D(2026, 11, 6, 9), c);
+  assert.equal(n.lines[0], "11/9(월)까지 담당 리드에게 넘깁니다.");
+  // 날이 지나면 사실만 말합니다(색·사과 없음).
+  n = K.askNow(base, D(2026, 11, 5, 9), c);
+  assert.equal(n.late, true);
+  assert.equal(n.lines[0], "넘기기로 한 날(11/4(수))이 지났습니다. 넘기면 이 화면에 바로 보입니다.");
+  // 같은 날 안에서는 늦음이 아닙니다(시각까지 따지지 않음).
+  assert.equal(K.askNow(base, D(2026, 11, 4, 23), c).late, false);
+  // 쉬는 날을 뺍니다.
+  n = K.askNow(base, D(2026, 11, 3, 9), K.cal("2026-11-04 쉬는 날"));
+  assert.equal(n.lines[0], "11/5(목)까지 담당 리드에게 넘깁니다.");
+});
+
+test("askNow: 넘긴 뒤·작업 중·끝남·보류·진행 안 함·취소", () => {
+  const c = K.cal("");
+  const now = D(2026, 11, 10, 10);
+  let n = K.askNow({ status: "리드 전달", forwardedAt: at(2026, 11, 3), programName: "로그 수집기" }, now, c);
+  assert.deepEqual([n.who, n.label, n.step], ["lead", "리드에게 넘김", 2]);
+  assert.equal(n.lines[0], "11/3(화)에 로그 수집기 담당 리드에게 넘겼습니다.");
+  assert.match(n.lines[1], /담당 리드가 작업량을 가늠한 뒤 날짜를/);
+  n = K.askNow({ status: "진행", statusAt: at(2026, 11, 5), forwardedAt: at(2026, 11, 3), eta: "2026-11-20" }, now, c);
+  assert.equal(n.lines[0], "11/5(목)부터 담당 리드가 작업하고 있습니다.");
+  assert.equal(n.lines[1], "끝날 날짜: 11/20(금)쯤 — 담당 리드가 가늠한 날이라 바뀔 수 있습니다.");
+  // 알린 날짜가 지나도 요청자 화면은 '지남'을 말하지 않습니다(담당자만 봄).
+  n = K.askNow({ status: "진행", eta: "2026-11-01" }, now, c);
+  assert.ok(!n.lines.join(" ").includes("지남") && !n.lines.join(" ").includes("지났"));
+  n = K.askNow({ status: "완료", closedAt: at(2026, 11, 9), check: "파일이 받아짐" }, now, c);
+  assert.deepEqual([n.who, n.step], ["me", 4]);
+  assert.equal(n.lines[1], "요청하실 때 적으신 확인 방법: 파일이 받아짐");
+  n = K.askNow({ status: "완료", closedAt: at(2026, 11, 9), doneOkAt: at(2026, 11, 9, 15) }, now, c);
+  assert.equal(n.who, "");
+  assert.equal(n.lines[1], "11/9(월)에 확인해 주셨습니다.");
+  n = K.askNow({ status: "보류", heldAt: at(2026, 11, 6), missing: ["why"], editable: true, reply: K.HOLD_REASONS[0] }, now, c);
+  assert.deepEqual([n.who, n.label, n.step], ["me", "보류", -1]);
+  assert.equal(n.lines[1], "빈칸을 채워 주시면 담당자가 확인해 다시 이어 갑니다.");
+  // 다른 까닭의 보류라면 빈칸이 있어도 요청자 차례가 아닙니다.
+  assert.equal(K.askNow({ status: "보류", heldAt: at(2026, 11, 6), missing: ["why"], editable: true, reply: K.HOLD_REASONS[2] }, now, c).who, "desk");
+  assert.equal(K.askNow({ status: "보류", heldAt: at(2026, 11, 6), missing: ["why"], editable: false, reply: K.HOLD_REASONS[0] }, now, c).who, "desk");
+  assert.equal(K.askNow({ status: "보류", heldAt: at(2026, 11, 6), forwardedAt: at(2026, 11, 3), missing: [] }, now, c).who, "desk");
+  n = K.askNow({ status: "종료", closedAt: at(2026, 11, 6) }, now, c);
+  assert.deepEqual([n.who, n.label], ["", "진행 안 함"]);
+  n = K.askNow({ status: "접수", withdrawnAt: at(2026, 11, 6) }, now, c);
+  assert.deepEqual([n.label, n.step], ["취소함", -1]);
+  n = K.askNow({ status: "리드 전달", forwardedAt: at(2026, 11, 3), withdrawnAt: at(2026, 11, 6) }, now, c);
+  assert.deepEqual([n.who, n.label, n.step], ["desk", "취소 알림", 2]);
+  assert.equal(n.last, at(2026, 11, 6));
+});
+
+test("취소(withdrawnAt): 넘기기 전이면 닫힌 것, 넘긴 뒤면 담당자가 닫을 때까지 열림", () => {
+  const c = K.cal("");
+  const now = D(2026, 11, 4, 15);
+  const before = { id: "b", status: "접수", receivedAt: D(2026, 10, 29, 10).toISOString(), withdrawnAt: D(2026, 11, 3).toISOString() };
+  const fwd = { id: "f", status: "리드 전달", forwardedAt: D(2026, 11, 2).toISOString(), receivedAt: D(2026, 11, 1).toISOString(), withdrawnAt: D(2026, 11, 3).toISOString() };
+  assert.equal(K.isOpenReq(before), false);
+  assert.equal(K.reqClock(before, now, c), null); // 기한 넘김으로 세지 않음
+  assert.equal(K.isOpenReq(fwd), true);
+  assert.equal(K.askNews(fwd).level, "crit");
+  assert.deepEqual(K.intakeView([before, fwd], "open", now, c).map((r) => r.id), ["f"]);
+  assert.equal(K.fridayCounts({ requests: [before] }, now, c).waiting, 0);
+  assert.deepEqual(K.intakeCounts([before, fwd], now, c), { open: 1, over: 0, blanks: 0, news: 2 });
+});
+
+test("askNews: 요청자 소식은 하나만, 중요한 것부터, 본 뒤에는 사라진다", () => {
+  const t = (d, h = 10) => D(2026, 11, d, h).toISOString();
+  assert.equal(K.askNews({ status: "접수" }), null);
+  let n = K.askNews({ status: "정리 중", askedAt: t(2), addedAt: t(3), filledAt: t(3) });
+  assert.deepEqual([n.kind, n.unseen], ["filled", true]);
+  assert.equal(K.askNews({ status: "정리 중", askedAt: t(2), addedAt: t(3), filledAt: t(3), seenAt: t(4) }), null);
+  assert.equal(K.askNews({ status: "정리 중", addedAt: t(3), askedAt: t(4) }), null); // 다시 되물었으면 옛 소식
+  n = K.askNews({ status: "리드 전달", forwardedAt: t(2), addedAt: t(5), filledAt: t(1), adds: [{ at: t(5), text: "x" }] });
+  assert.equal(n.kind, "add");
+  assert.equal(K.askNews({ status: "리드 전달", forwardedAt: t(2), addedAt: t(5) }).kind, "add"); // adds 이전의 옛 데이터
+  // 끝남 확인으로 addedAt이 바뀌어도 '덧붙임'이 아닙니다(완료로 닫은 뒤 다시 올라오지 않음).
+  assert.equal(K.askNews({ status: "완료", closedAt: t(6), doneOkAt: t(5), addedAt: t(5), filledAt: t(1), seenAt: t(2) }), null);
+  assert.equal(K.reqAttention({ status: "완료", closedAt: t(6), doneOkAt: t(5), addedAt: t(5), seenAt: t(2) }), false);
+  n = K.askNews({ status: "리드 전달", forwardedAt: t(2), doneOkAt: t(5), addedAt: t(5), seenAt: t(6) });
+  assert.deepEqual([n.kind, n.level, n.unseen], ["doneok", "good", false]); // 완료로 바꿀 때까지 남음
+  n = K.askNews({ status: "완료", closedAt: t(4), doneNoAt: t(5), addedAt: t(5) });
+  assert.deepEqual([n.kind, n.level], ["notyet", "crit"]);
+  assert.equal(K.reqAttention({ status: "완료", closedAt: t(4), doneNoAt: t(5), addedAt: t(5) }), true); // 끝난 것이라도 열린 보기에 다시
+  assert.equal(K.reqAttention({ status: "종료", closedAt: t(4), addedAt: t(5) }), true); // 다시 봐 달라는 덧붙임
+  assert.equal(K.reqAttention({ status: "종료", closedAt: t(4), addedAt: t(5), seenAt: t(6) }), false);
+  n = K.askNews({ status: "리드 전달", forwardedAt: t(2), withdrawnAt: t(5), doneNoAt: t(4), seenAt: t(6) });
+  assert.equal(n.kind, "cancel"); // 넘긴 뒤 취소는 본 뒤에도 닫을 때까지 남음
+});
+
+test("요청자 소식 문장: 이유·날짜·덧붙임 전달·보고 한 줄", () => {
+  const link = "http://10.0.0.5:8180/r/abcdefghjk";
+  assert.equal(K.replyText({ what: "버튼", status: "보류", reply: K.HOLD_REASONS[1] }, link),
+    "\"버튼\" 요청은 잠시 보류합니다.\n" + K.HOLD_REASONS[1] + "\n자세한 진행 상황은 이 링크에서 보실 수 있습니다: " + link);
+  assert.match(K.replyText({ what: "버튼", status: "종료", reply: "x" }, ""), /^"버튼" 요청은 진행하지 않기로 했습니다\.\nx$/);
+  assert.match(K.etaText({ what: "버튼", eta: "2026-11-20" }, link), /^"버튼" 요청은 담당 리드가 가늠해 보니 11\/20\(금\)쯤 끝날 것 같습니다\./);
+  const r = { what: "버튼", adds: [{ at: D(2026, 11, 2).toISOString(), text: "전" }, { at: D(2026, 11, 5).toISOString(), text: "날짜\n당겨짐" }, { at: D(2026, 11, 6).toISOString(), text: "다름", kind: "notyet" }, { text: "" }, 3] };
+  assert.equal(K.addsText(r, D(2026, 11, 3).toISOString()), "[요청자 덧붙임] 버튼\n- 11/5(목): 날짜 당겨짐\n- 11/6(금) (아직 다름): 다름");
+  assert.equal(K.addsText(r, D(2026, 11, 7).toISOString()), "");
+  assert.match(K.handoffText(r, "p"), /요청자 덧붙임: 전 \/ 날짜 당겨짐 \/ 다름/);
+  assert.equal(K.askReportText({ what: "버튼", status: "리드 전달", forwardedAt: D(2026, 11, 3).toISOString() }, link, D(2026, 11, 4), K.cal("")),
+    "[요청 현황] 버튼 — 지금: 리드에게 넘김(11/3(화)) · 날짜: 담당 리드가 가늠한 뒤 정해짐 · " + link);
+  // 보류·종료 이유는 탓하는 말이 아니고, 거절만 있는 이유는 없습니다(거절은 팀장과 정한 뒤).
+  for (const x of K.HOLD_REASONS.concat(K.CLOSE_REASONS)) assert.doesNotMatch(x, /우선순위가? 낮|불명확|안 됩니다|못 합니다/);
+  assert.ok(K.CLOSE_REASONS.some((x) => /팀장과 정한/.test(x)));
+});
+
+test("검토 뒤 고침: 리드가 맡은 기준·다시 연 요청·아직 다름·지난 소식", () => {
+  const c = K.cal("");
+  const t = (d, h = 10) => D(2026, 11, d, h).toISOString();
+  // 긴급처럼 리드 전달 없이 진행된 요청을 취소하면 '리드에게 알리고 닫기'(넘기기 전 취소가 아님)
+  const urg = { id: "u", status: "진행", urgent: true, receivedAt: t(2), withdrawnAt: t(4) };
+  assert.equal(K.isOpenReq(urg), true);
+  assert.equal(K.askNews(urg).level, "crit");
+  assert.equal(K.askNow(urg, D(2026, 11, 5), c).label, "취소 알림");
+  // 리드가 맡은 뒤 취소했는데 완료로 닫았다면: 취소함(요청자에게 할 일을 내밀지 않음)
+  assert.deepEqual([K.askNow({ status: "완료", forwardedAt: t(2), withdrawnAt: t(4), closedAt: t(5) }, D(2026, 11, 6), c).label, K.askNow({ status: "완료", forwardedAt: t(2), withdrawnAt: t(4), closedAt: t(5) }, D(2026, 11, 6), c).who], ["취소함", ""]);
+  // 다시 연 요청: 그 전의 '끝났어요'는 셈하지 않음
+  const re = { status: "진행", forwardedAt: t(2), doneOkAt: t(5), reopenedAt: t(6), statusAt: t(6) };
+  assert.equal(K.doneState(re), "");
+  assert.equal(K.askNow(re, D(2026, 11, 9), c).who, "lead");
+  assert.equal(K.askNews(re), null);
+  assert.equal(K.askNow(Object.assign({}, re, { status: "완료", closedAt: t(9) }), D(2026, 11, 10), c).who, "me"); // 다시 확인할 차례
+  // 아직 다름은 열어 봐도 남고, 상태를 바꾸거나 남길 말을 새로 적으면 사라짐
+  const no = { status: "완료", forwardedAt: t(2), closedAt: t(4), statusAt: t(4), doneNoAt: t(5), addedAt: t(5), adds: [{ at: t(5), text: "다름", kind: "notyet" }], seenAt: t(6) };
+  assert.equal(K.askNews(no).kind, "notyet");
+  assert.equal(K.askNews(no).unseen, false);
+  assert.equal(K.reqAttention(no), true);
+  assert.equal(K.askNews(Object.assign({}, no, { reply: "확인해 보니 맞습니다", replyAt: t(7) })), null);
+  // 끝남 확인 뒤에 온 덧붙임은 가려지지 않음
+  assert.equal(K.askNews({ status: "진행", forwardedAt: t(2), doneOkAt: t(5), seenAt: t(6), addedAt: t(7), adds: [{ at: t(7), text: "하나 더" }] }).kind, "add");
+  // 넘기기 전의 빈칸 채움은 넘기거나 닫은 뒤에는 새 소식이 아님
+  const old = { status: "완료", askedAt: t(2), filledAt: t(3), addedAt: t(3), forwardedAt: t(4), closedAt: t(9), statusAt: t(9) };
+  assert.equal(K.askNews(old), null);
+  assert.equal(K.reqAttention(old), false);
+  // 열어 둔 요청은 소식을 본 것으로 쳐도 보기에서 빠지지 않음
+  const seen = Object.assign({}, no, { id: "n", reply: "x", replyAt: t(7) });
+  assert.deepEqual(K.intakeView([seen], "open", D(2026, 11, 10), c).map((r) => r.id), []);
+  assert.deepEqual(K.intakeView([seen], "open", D(2026, 11, 10), c, "n").map((r) => r.id), ["n"]);
+  // 보고용 한 줄: 보류·진행 안 함·취소에는 날짜를 붙이지 않음
+  assert.doesNotMatch(K.askReportText({ what: "x", status: "보류", heldAt: t(4), eta: "2026-11-20" }, "", D(2026, 11, 5), c), /날짜/);
+  assert.doesNotMatch(K.askReportText({ what: "x", status: "리드 전달", forwardedAt: t(2), withdrawnAt: t(4) }, "", D(2026, 11, 5), c), /날짜/);
+  assert.match(K.askReportText({ what: "x", status: "진행", statusAt: t(3), eta: "2026-11-20" }, "", D(2026, 11, 5), c), /날짜: 11\/20\(금\)쯤/);
+});
+
+test("되묻기 기다림: 요청자 화면의 날과 담당자에게 '보류할지' 뜨는 날이 같다", () => {
+  const c = K.cal("");
+  const asked = D(2026, 11, 9, 20).toISOString(); // 월 20시(근무 시간 뒤)
+  const page = K.askNow({ status: "정리 중", receivedAt: asked, askedAt: asked, missing: ["why"] }, D(2026, 11, 10), c).lines[2];
+  assert.equal(page, "11/23(월)까지 답이 없으면 보류해 둡니다.");
+  const st = { requests: [{ id: "a", what: "x", status: "정리 중", receivedAt: asked, askedAt: asked }] };
+  const has = (d) => K.todayActions(st, d, c).some((a) => /답 없음/.test(a.text));
+  assert.equal(has(D(2026, 11, 20, 10)), false);
+  assert.equal(has(D(2026, 11, 23, 10)), true);
+});
+
+test("replyNow: 지금 단계 전에 남긴 말(예: 지난 보류 이유)은 요청자에게 보이지 않는다", () => {
+  const t = (d) => D(2026, 11, d, 10).toISOString();
+  assert.equal(K.replyNow({ status: "보류", statusAt: t(3), reply: " 이유 ", replyAt: t(3) }), "이유"); // 같은 때 = 지금 것
+  assert.equal(K.replyNow({ status: "리드 전달", statusAt: t(5), reply: "지난 보류 이유", replyAt: t(3) }), "");
+  assert.equal(K.replyNow({ status: "리드 전달", statusAt: t(5), reply: "맡았습니다", replyAt: t(6) }), "맡았습니다");
+  assert.equal(K.replyNow({ reply: "옛 데이터" }), "옛 데이터");
+  assert.equal(K.replyNow({ reply: "" }), "");
+});
+
+test("etaState: 알린 날짜는 담당자만 본다(지남·내일)", () => {
+  const c = K.cal("");
+  assert.equal(K.etaState({ status: "진행", eta: "2026-11-05" }, D(2026, 11, 6, 9), c), "past");
+  assert.equal(K.etaState({ status: "진행", eta: "2026-11-09" }, D(2026, 11, 6, 9), c), "soon"); // 금 → 다음 근무일 월
+  assert.equal(K.etaState({ status: "진행", eta: "2026-11-20" }, D(2026, 11, 6, 9), c), "");
+  assert.equal(K.etaState({ status: "완료", eta: "2026-11-05" }, D(2026, 11, 6, 9), c), "");
+  assert.equal(K.etaState({ status: "진행", eta: "다음 주" }, D(2026, 11, 6, 9), c), "");
 });

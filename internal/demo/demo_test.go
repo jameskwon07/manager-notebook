@@ -2,6 +2,7 @@ package demo
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestSeedFillsEveryCollection(t *testing.T) {
 	if state.Settings == nil || state.Settings["startDate"] != "2026-10-12" {
 		t.Fatalf("startDate: %v", state.Settings["startDate"])
 	}
-	want := map[string]int{"programs": 7, "requests": 7, "decisions": 3, "mapitems": 4, "timelog": 5, "blockers": 2, "notes": 2, "weeks": 1, "cycles": 1, "fridays": 1}
+	want := map[string]int{"programs": 7, "requests": 8, "decisions": 3, "mapitems": 4, "timelog": 5, "blockers": 2, "notes": 2, "weeks": 1, "cycles": 1, "fridays": 1}
 	for coll, n := range want {
 		if got := len(state.Colls[coll]); got != n {
 			t.Errorf("%s: %d docs, want %d", coll, got, n)
@@ -43,6 +44,10 @@ func TestSeedFillsEveryCollection(t *testing.T) {
 	for _, r := range state.Colls["requests"] {
 		if !ids[r["program"].(string)] {
 			t.Errorf("request %v points at unknown program %v", r["id"], r["program"])
+		}
+		// 창구 예시의 링크 코드는 실제 창구가 받는 모양(헷갈리는 글자 없는 10자)이어야 합니다.
+		if c, ok := r["askCode"].(string); ok && !regexp.MustCompile(`^[23456789abcdefghjkmnpqrstuvwxyz]{10}$`).MatchString(c) {
+			t.Errorf("request %v askCode %q", r["id"], c)
 		}
 	}
 	// The cycle doc is keyed by the first cycle's Monday (start + 2 weeks).

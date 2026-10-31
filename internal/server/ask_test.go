@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -175,14 +176,16 @@ func TestAskCreateViewAndFill(t *testing.T) {
 		t.Fatalf("view leaks manager fields: %d %s", resp.StatusCode, b)
 	}
 
-	// 빈칸 채우기: 빈 값은 무시하고, 덧붙임은 원문 뒤에 붙습니다.
+	// 빈칸 채우기: 빈 값은 무시하고, 덧붙임은 원문(raw)이 아니라 adds에 따로 쌓입니다.
 	e.now = e.now.Add(time.Hour)
 	resp, b = e.do("PATCH", "/api/ask/"+code, `{"why":"팀장 지시","check":"","when":"","more":"화면 캡처는 메일로 보냈습니다"}`)
 	if resp.StatusCode != 200 {
 		t.Fatalf("fill: %d %s", resp.StatusCode, b)
 	}
 	v = jsonMap(t, b)
-	if v["why"] != "팀장 지시" || v["when"] != "11/20, 고객 시연" || !strings.HasSuffix(v["raw"].(string), "[덧붙임 11/2 11:00] 화면 캡처는 메일로 보냈습니다") || v["addedAt"] != "2026-11-02T02:00:00.000Z" {
+	adds, _ := v["adds"].([]any)
+	if v["why"] != "팀장 지시" || v["when"] != "11/20, 고객 시연" || v["raw"] != "줄1\n줄2" || len(adds) != 1 ||
+		adds[0].(map[string]any)["text"] != "화면 캡처는 메일로 보냈습니다" || v["addedAt"] != "2026-11-02T02:00:00.000Z" || v["filledAt"] != "2026-11-02T02:00:00.000Z" {
 		t.Fatalf("filled: %v", v)
 	}
 	if fmt.Sprint(v["missing"]) != "[check]" {
@@ -192,15 +195,30 @@ func TestAskCreateViewAndFill(t *testing.T) {
 	wantErr(t, resp, b, 400, "empty")
 	resp, b = e.do("PATCH", "/api/ask/"+code, `{"program":"없는-id"}`)
 	wantErr(t, resp, b, 400, "bad_program")
+	// 이미 적힌 칸은 요청자가 덮어쓰지 못합니다(담당자가 고친 것을 지키려고).
+	resp, b = e.do("PATCH", "/api/ask/"+code, `{"why":"다른 이유"}`)
+	wantErr(t, resp, b, 400, "empty")
 
-	// 리드에게 넘어가면 더는 고칠 수 없습니다.
+	// 담당자가 오래된 사본으로 raw를 저장해도 요청자의 덧붙임은 남습니다.
+	if _, err := e.st.Patch(context.Background(), "requests", id, store.Doc{"raw": "담당자가 고친 원문"}); err != nil {
+		t.Fatal(err)
+	}
+	_, b = e.do("GET", "/api/ask/"+code, "")
+	if v = jsonMap(t, b); len(v["adds"].([]any)) != 1 {
+		t.Fatalf("adds lost after manager raw edit: %v", v)
+	}
+
+	// 리드에게 넘어가면 빈칸은 잠기고, 덧붙임은 계속 됩니다.
 	if _, err := e.st.Patch(context.Background(), "requests", id, store.Doc{"status": "리드 전달", "forwardedAt": "2026-11-02T03:00:00.000Z"}); err != nil {
 		t.Fatal(err)
 	}
 	resp, b = e.do("PATCH", "/api/ask/"+code, `{"check":"화면에서 버튼 확인"}`)
 	wantErr(t, resp, b, 409, "locked")
-	_, b = e.do("GET", "/api/ask/"+code, "")
-	if v = jsonMap(t, b); v["editable"] != false || v["status"] != "리드 전달" {
+	resp, b = e.do("PATCH", "/api/ask/"+code, `{"more":"리허설이 11/18로 당겨졌습니다"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("note after forward: %d %s", resp.StatusCode, b)
+	}
+	if v = jsonMap(t, b); v["editable"] != false || v["status"] != "리드 전달" || len(v["adds"].([]any)) != 2 || v["canConfirm"] != true {
 		t.Fatalf("after forward: %v", v)
 	}
 
@@ -284,5 +302,202 @@ func TestNewAskCode(t *testing.T) {
 			t.Fatalf("code %q", c)
 		}
 		seen[c] = true
+	}
+}
+
+// TestAskPublicViewAllowList: what a requester sees is an explicit list; the
+// receiver's own fields never leak, whatever the notebook stores.
+func TestAskPublicViewAllowList(t *testing.T) {
+	e := newAskEnv(t)
+	v := e.send(`{"what":"요청","from":"나"}`)
+	code := v["code"].(string)
+	docs, _ := e.st.List(context.Background(), "requests")
+	id := docs[0]["id"].(string)
+	long := strings.Repeat("가", askReplyMax+20)
+	if _, err := e.st.Patch(context.Background(), "requests", id, store.Doc{
+		"note": "SECRET-메모", "est": map[string]any{"min": 1}, "size": "L", "urgent": false, "absorbed": true, "absorbedAt": "x",
+		"reply": long, "replyAt": "2026-11-02T03:00:00.000Z", "eta": "2026-11-20", "etaAt": "2026-11-02T03:00:00.000Z",
+		"seenAt": "2026-11-02T03:00:00.000Z", "createdAt": "x", "extra": "SECRET-기타",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp, b := e.do("GET", "/api/ask/"+code, "")
+	if resp.StatusCode != 200 || strings.Contains(string(b), "SECRET") {
+		t.Fatalf("leak: %d %s", resp.StatusCode, b)
+	}
+	v = jsonMap(t, b)
+	var keys []string
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	want := "addedAt adds askedAt canAdd canConfirm canWithdraw check closedAt code doneNoAt doneOkAt editable eta etaAt filledAt forwardedAt from heldAt missing program programName raw receivedAt reopenedAt reply replyAt status statusAt what when why withdrawnAt"
+	if got := strings.Join(keys, " "); got != want {
+		t.Fatalf("view keys\n got %s\nwant %s", got, want)
+	}
+	if n := len([]rune(v["reply"].(string))); n != askReplyMax {
+		t.Fatalf("reply not clipped: %d", n)
+	}
+	if v["eta"] != "2026-11-20" {
+		t.Fatalf("eta: %v", v["eta"])
+	}
+	e.st.Patch(context.Background(), "requests", id, store.Doc{"eta": "다음 주쯤"})
+	if _, b = e.do("GET", "/api/ask/"+code, ""); jsonMap(t, b)["eta"] != "" {
+		t.Fatalf("bad eta passed through: %s", b)
+	}
+	// 직접 적은 요청(창구로 온 것이 아님)의 원문은 보이지 않습니다.
+	e.st.Patch(context.Background(), "requests", id, store.Doc{"via": nil, "raw": "메신저에서 옮긴 남의 말"})
+	if _, b = e.do("GET", "/api/ask/"+code, ""); strings.Contains(string(b), "남의 말") {
+		t.Fatalf("typed-in raw shown: %s", b)
+	}
+}
+
+func TestAskFormSettings(t *testing.T) {
+	e := newAskEnv(t)
+	_, b := e.do("GET", "/api/ask/form", "")
+	f := jsonMap(t, b)
+	if f["holidays"] != nil || f["owner"] != "" || f["notice"] != "" {
+		t.Fatalf("defaults: %v", f)
+	}
+	if _, err := e.st.PutSettings(context.Background(), store.Doc{"askOwner": "  홍 파트 리드 ", "askNotice": "11/3~11/5 휴가입니다", "holidays": "2026-11-03 SECRET-건강검진\n2026-12-25 성탄절",
+		"people": []any{map[string]any{"id": "p1", "label": "SECRET-사람"}}, "requesterRoles": []any{"SECRET-역할"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, b = e.do("GET", "/api/ask/form", "")
+	if strings.Contains(string(b), "SECRET") {
+		t.Fatalf("settings leak: %s", b)
+	}
+	f = jsonMap(t, b)
+	if f["holidays"] != "2026-11-03\n2026-12-25" || f["owner"] != "홍 파트 리드" || f["notice"] != "11/3~11/5 휴가입니다" {
+		t.Fatalf("form: %v", f)
+	}
+}
+
+func TestAskWithdraw(t *testing.T) {
+	e := newAskEnv(t)
+	code := e.send(`{"what":"요청","from":"나"}`)["code"].(string)
+	docs, _ := e.st.List(context.Background(), "requests")
+	id := docs[0]["id"].(string)
+
+	e.now = e.now.Add(time.Hour)
+	resp, b := e.do("POST", "/api/ask/"+code+"/withdraw", `{"text":"다른 방법으로 해결했습니다"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("withdraw: %d %s", resp.StatusCode, b)
+	}
+	v := jsonMap(t, b)
+	if v["withdrawnAt"] != "2026-11-02T02:00:00.000Z" || v["status"] != "접수" || v["editable"] != false || v["canWithdraw"] != false || v["canAdd"] != false {
+		t.Fatalf("withdrawn view: %v", v)
+	}
+	// 창구는 status를 쓰지 않습니다.
+	got, _ := e.st.Get(context.Background(), "requests", id)
+	if got["status"] != "접수" || got["closedAt"] != nil || got["withdrawnAt"] != "2026-11-02T02:00:00.000Z" {
+		t.Fatalf("stored after withdraw: %v", got)
+	}
+	if adds := askAdds(got); len(adds) != 1 || adds[0]["kind"] != "cancel" {
+		t.Fatalf("cancel note: %v", adds)
+	}
+	// 두 번 눌러도 한 번입니다.
+	e.now = e.now.Add(time.Hour)
+	if resp, _ := e.do("POST", "/api/ask/"+code+"/withdraw", `{}`); resp.StatusCode != 200 {
+		t.Fatalf("second withdraw: %d", resp.StatusCode)
+	}
+	if got, _ := e.st.Get(context.Background(), "requests", id); got["withdrawnAt"] != "2026-11-02T02:00:00.000Z" {
+		t.Fatalf("withdrawnAt moved: %v", got["withdrawnAt"])
+	}
+	resp, b = e.do("PATCH", "/api/ask/"+code, `{"more":"x"}`)
+	wantErr(t, resp, b, 409, "withdrawn")
+
+	// 끝난 요청은 취소할 것이 없습니다.
+	code2 := e.send(`{"what":"요청 2","from":"나"}`)["code"].(string)
+	docs, _ = e.st.List(context.Background(), "requests")
+	for _, d := range docs {
+		if d["askCode"] == code2 {
+			e.st.Patch(context.Background(), "requests", d["id"].(string), store.Doc{"status": "완료", "closedAt": "x"})
+		}
+	}
+	resp, b = e.do("POST", "/api/ask/"+code2+"/withdraw", `{}`)
+	wantErr(t, resp, b, 409, "closed")
+	resp, b = e.do("POST", "/api/ask/zzzzzzzzzz/withdraw", `{}`)
+	wantErr(t, resp, b, 404, "not_found")
+	if !strings.Contains(e.log.String(), "창구 POST /api/ask/{code}/withdraw 200") || strings.Contains(e.log.String(), code) {
+		t.Fatalf("log:\n%s", e.log.String())
+	}
+}
+
+func TestAskDone(t *testing.T) {
+	e := newAskEnv(t)
+	code := e.send(`{"what":"요청","from":"나"}`)["code"].(string)
+	docs, _ := e.st.List(context.Background(), "requests")
+	id := docs[0]["id"].(string)
+
+	// 리드에게 넘어가기 전에는 끝남을 알릴 수 없습니다.
+	resp, b := e.do("POST", "/api/ask/"+code+"/done", `{"ok":true}`)
+	wantErr(t, resp, b, 409, "not_yet")
+	e.st.Patch(context.Background(), "requests", id, store.Doc{"status": "리드 전달", "forwardedAt": "2026-11-02T03:00:00.000Z"})
+
+	resp, b = e.do("POST", "/api/ask/"+code+"/done", `{"ok":false}`)
+	wantErr(t, resp, b, 400, "need_text")
+	resp, b = e.do("POST", "/api/ask/"+code+"/done", `{"ok":"yes"}`)
+	wantErr(t, resp, b, 400, "bad_field")
+	e.now = e.now.Add(time.Hour)
+	resp, b = e.do("POST", "/api/ask/"+code+"/done", `{"ok":false,"text":"버튼은 있는데 파일이 비어 있습니다"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("not yet: %d %s", resp.StatusCode, b)
+	}
+	v := jsonMap(t, b)
+	if v["doneNoAt"] != "2026-11-02T02:00:00.000Z" || len(v["adds"].([]any)) != 1 || v["status"] != "리드 전달" {
+		t.Fatalf("not yet view: %v", v)
+	}
+	e.now = e.now.Add(time.Hour)
+	resp, b = e.do("POST", "/api/ask/"+code+"/done", `{"ok":true}`)
+	if v = jsonMap(t, b); resp.StatusCode != 200 || v["doneOkAt"] != "2026-11-02T03:00:00.000Z" || v["addedAt"] != "2026-11-02T03:00:00.000Z" {
+		t.Fatalf("done: %d %v", resp.StatusCode, v)
+	}
+	if got, _ := e.st.Get(context.Background(), "requests", id); got["status"] != "리드 전달" {
+		t.Fatalf("door wrote status: %v", got["status"])
+	}
+	e.st.Patch(context.Background(), "requests", id, store.Doc{"status": "종료"})
+	resp, b = e.do("POST", "/api/ask/"+code+"/done", `{"ok":true}`)
+	wantErr(t, resp, b, 409, "closed")
+}
+
+func TestAskAddsCap(t *testing.T) {
+	e := newAskEnv(t)
+	code := e.send(`{"what":"요청","from":"나"}`)["code"].(string)
+	for i := 0; i < AskMaxAdds; i++ {
+		if resp, b := e.do("PATCH", "/api/ask/"+code, fmt.Sprintf(`{"more":"덧붙임 %d"}`, i)); resp.StatusCode != 200 {
+			t.Fatalf("add %d: %d %s", i, resp.StatusCode, b)
+		}
+	}
+	resp, b := e.do("PATCH", "/api/ask/"+code, `{"more":"하나 더"}`)
+	wantErr(t, resp, b, 409, "too_many_adds")
+	_, b = e.do("GET", "/api/ask/"+code, "")
+	if v := jsonMap(t, b); v["canAdd"] != false {
+		t.Fatalf("canAdd at cap: %v", v["canAdd"])
+	}
+}
+
+// TestAskClosedBeforeForward: blanks on a request closed before it reached a lead get "closed", not "locked".
+func TestAskClosedBeforeForward(t *testing.T) {
+	e := newAskEnv(t)
+	code := e.send(`{"what":"요청","from":"나"}`)["code"].(string)
+	docs, _ := e.st.List(context.Background(), "requests")
+	e.st.Patch(context.Background(), "requests", docs[0]["id"].(string), store.Doc{"status": "종료", "closedAt": "x"})
+	resp, b := e.do("PATCH", "/api/ask/"+code, `{"why":"x"}`)
+	wantErr(t, resp, b, 409, "closed")
+	if resp, b := e.do("PATCH", "/api/ask/"+code, `{"more":"다시 봐 주세요"}`); resp.StatusCode != 200 {
+		t.Fatalf("note on closed: %d %s", resp.StatusCode, b)
+	}
+}
+
+// TestAskHeldCanBeFilled: a request on hold for missing answers can still be filled through the link.
+func TestAskHeldCanBeFilled(t *testing.T) {
+	e := newAskEnv(t)
+	code := e.send(`{"what":"요청","from":"나"}`)["code"].(string)
+	docs, _ := e.st.List(context.Background(), "requests")
+	e.st.Patch(context.Background(), "requests", docs[0]["id"].(string), store.Doc{"status": "보류", "heldAt": "x"})
+	resp, b := e.do("PATCH", "/api/ask/"+code, `{"why":"다음 달 시연"}`)
+	if resp.StatusCode != 200 || jsonMap(t, b)["why"] != "다음 달 시연" {
+		t.Fatalf("held fill: %d %s", resp.StatusCode, b)
 	}
 }

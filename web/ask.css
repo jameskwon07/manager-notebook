@@ -4,6 +4,9 @@
 .ask-top h1 { font-size: var(--s3); }
 .ask-sub { color: var(--ink-soft); max-width: 64ch; }
 .ask-req { font-size: .72rem; font-weight: 600; color: var(--bad); margin-left: 4px; }
+.ask-owner { font-weight: 600; }
+.ask-rule-list { margin: 0; padding-left: 1.4em; display: grid; gap: 4px; }
+.ask-rule-list li { overflow-wrap: anywhere; }
 .ask-form .row .ex { flex: 1 1 220px; }
 
 .ask-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; counter-reset: step; }
@@ -11,10 +14,23 @@
 .ask-steps li::before { content: counter(step) ". "; font-family: var(--f-mono); }
 .ask-steps li.done { border-top-color: var(--accent); }
 .ask-steps li.now { border-top-color: var(--accent); color: var(--ink); font-weight: 700; }
-.ask-stop { margin: 0; }
+/* 지금: 누구 차례인지에 따라 왼쪽 줄 색만 바뀝니다(늦음을 빨갛게 칠하지 않음). */
+.ask-now { display: grid; gap: 4px; border-left: 4px solid var(--accent); background: var(--paper); border-radius: 0 6px 6px 0; padding: 10px 12px; }
+.ask-now p { margin: 0; overflow-wrap: anywhere; }
+.ask-now.who-me { border-left-color: var(--mark); background: var(--mark-soft); }
+.ask-now.who-end { border-left-color: var(--rule); }
+.ask-who b { font-weight: 700; }
+.ask-reply { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; display: grid; gap: 4px; }
+.ask-reply p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-done { border-top: 1px dashed var(--rule); padding-top: 12px; }
+.ask-adds ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ask-adds li { border-left: 2px solid var(--grid); padding-left: 8px; display: grid; gap: 2px; }
+.ask-adds li div { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-cancel { border-top: 1px dashed var(--rule); padding-top: 10px; }
 
-.ask-link { padding: 8px 10px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; }
+.ask-link { padding: 8px 10px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; gap: 6px; }
 .ask-link .mono { flex: 1 1 240px; overflow-wrap: anywhere; min-width: 0; }
+.ask-link p { margin: 0; }
 .ask-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
 .ask-dl dt { color: var(--ink-soft); font-size: var(--s-1); }
 .ask-dl dd { margin: 0; overflow-wrap: anywhere; }

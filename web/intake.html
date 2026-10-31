@@ -76,6 +76,12 @@
         <h3><label for="ib-askurl">요청 창구 주소</label></h3>
         <p class="ex">요청자에게 줄 링크의 앞부분. 비우면 이 PC 주소를 자동으로 씁니다. Docker로 켰다면 http://PC주소:8180/ 처럼 적습니다.</p>
         <input type="text" id="ib-askurl" autocomplete="off" placeholder="자동" class="mono">
+        <h3><label for="ib-askowner">창구에 보일 받는 사람</label></h3>
+        <p class="ex">요청자 화면 맨 위에 '받는 사람: …'으로 보입니다. 비우면 보이지 않습니다.</p>
+        <input type="text" id="ib-askowner" autocomplete="off" maxlength="60" placeholder="예: 홍길동 (파트 리드)">
+        <h3><label for="ib-asknotice">창구 알림 한 줄</label></h3>
+        <p class="ex">휴가·출장처럼 요청자가 알아야 할 것. 요청자 화면 위에 보입니다. 다 지나면 지워 주세요.</p>
+        <input type="text" id="ib-asknotice" autocomplete="off" maxlength="300" placeholder="예: 11/3~11/5 휴가입니다. 급한 일은 ○○에게 알려 주세요.">
         <h3><label for="ib-roles">보낸 분 예시(역할)</label></h3>
         <p class="ex">직접 적을 때 고를 수 있는 역할. 한 줄에 하나.</p>
         <textarea id="ib-roles" rows="5"></textarea>

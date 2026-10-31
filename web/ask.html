@@ -17,10 +17,12 @@
 <div class="app ask" id="ask-app">
   <header class="ask-top">
     <h1>요청 보내기</h1>
-    <p class="ask-sub">적어 주신 그대로 담당자의 접수함에 들어갑니다. 보내면 받는 링크로 진행 상황을 보고, 빈칸을 나중에 채울 수 있습니다.</p>
+    <p class="ask-owner" id="ask-owner" hidden></p>
+    <p class="ask-sub">보내시면 이 요청만의 링크가 생깁니다. 그 링크에서 진행 상황과 날짜를 보고, 비운 칸을 나중에 채울 수 있습니다.</p>
   </header>
 
   <div class="callout warn" id="ask-demo" hidden><b>체험 모드</b> 예시 화면입니다. 보낸 요청은 담당자가 프로그램을 끄면 사라집니다.</div>
+  <div class="callout" id="ask-notice" hidden></div>
   <div class="callout crit" id="ask-note" role="status" hidden></div>
 
   <section class="card" id="ask-new" aria-labelledby="ask-new-h">
@@ -31,19 +33,25 @@
       <label for="ask-why"><span>왜 필요한가요? 누가 정한 일인가요?</span><input type="text" id="ask-why" maxlength="500" autocomplete="off" placeholder="예: 다음 달 시연용, 팀장 지시"></label>
       <label for="ask-when"><span>언제까지 필요한가요? 그 날짜인 이유는?</span><input type="text" id="ask-when" maxlength="500" autocomplete="off" placeholder="예: 11/20까지, 리허설이 11/21"></label>
       <label for="ask-check"><span>끝났다는 것을 어떻게 확인하면 될까요?</span><input type="text" id="ask-check" maxlength="500" autocomplete="off" placeholder="예: 버튼을 누르면 파일이 받아짐"></label>
-      <label for="ask-prog"><span>어느 프로그램(시스템)인가요?</span><select id="ask-prog"><option value="">잘 모르겠음</option></select></label>
+      <label for="ask-prog"><span>어느 프로그램(시스템)인가요? 모르면 담당자가 고릅니다</span><select id="ask-prog"><option value="">잘 모르겠음</option></select></label>
       <label for="ask-from"><span>보내는 분 <b class="ask-req">필수</b></span><input type="text" id="ask-from" maxlength="60" autocomplete="off" placeholder="이름·소속 (예: 홍길동 · 다른 파트)"></label>
-      <div class="wide row"><button class="btn primary" type="submit" id="ask-send">보내기</button><span class="ex">모르는 칸은 비워도 됩니다. 비운 칸은 담당자가 다시 여쭙니다.</span></div>
+      <div class="wide row"><button class="btn primary" type="submit" id="ask-send">보내기</button><span class="ex">모르는 칸은 비워도 됩니다. 필요한 칸은 담당자가 이 링크로 여쭙니다.</span></div>
       <p class="wide ex">사람 이름(예: ○○ 책임님)은 [팀원]으로 바꿔 저장합니다. 누가 정했는지는 '팀장 지시'처럼 역할로 적어 주세요. 보내는 분 칸은 그대로 둡니다.</p>
     </form>
+  </section>
+
+  <section class="card ask-rules" id="ask-rules" aria-labelledby="ask-rules-h">
+    <h2 id="ask-rules-h">요청은 이렇게 처리됩니다</h2>
+    <ol class="ask-rule-list" id="ask-rules-list"></ol>
+    <p class="ex">링크는 담당자 PC가 켜져 있을 때 열립니다.</p>
   </section>
 
   <section class="card" id="ask-view" hidden aria-live="polite"></section>
 
   <section class="card" id="ask-mine" hidden aria-labelledby="ask-mine-h">
-    <h2 id="ask-mine-h">이 브라우저에서 보낸 요청</h2>
+    <h2 id="ask-mine-h">이 브라우저에서 본 요청</h2>
     <ul class="ask-mine" id="ask-mine-list"></ul>
-    <p class="ex">이 목록은 이 브라우저에만 남습니다. 다른 PC에서는 받은 링크로 보세요.</p>
+    <div class="row between"><p class="ex">이 목록은 이 브라우저에만 남습니다. 여럿이 쓰는 PC라면 다 보신 뒤 지워 주세요.</p><button class="btn sm quiet" type="button" id="ask-mine-clear">목록 지우기</button></div>
   </section>
 
   <footer class="foot ex" id="ask-foot"></footer>

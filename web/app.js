@@ -114,7 +114,7 @@
     ]
   };
   var DEF_TEMPLATES = [
-    { title: "확인 후 회신", body: "날짜는 담당 리드가 추정한 뒤 회신드리겠습니다. 근무일 2일 안에 알려 드립니다." },
+    { title: "확인 후 회신", body: "근무일 2일 안에 담당 리드에게 넘기고, 날짜는 담당 리드가 작업량을 가늠한 뒤 알려 드리겠습니다." },
     { title: "2주 이내 약속", body: "[요청]은 [날짜]까지 가능합니다. 범위는 [최소 범위]로 잡았고, 확인은 [확인 방법]으로 하겠습니다." },
     { title: "교환 제안", body: "[요청]을 이번 사이클에 넣으면 [다른 일]이 [기간] 밀립니다. 어느 쪽을 먼저 할지 정해 주시면 그대로 진행하겠습니다." },
     { title: "거절·2주 초과 — 팀장에게 올리는 한 줄", body: "요청: [무엇·요청자 역할] / 리드 추정: 최소 [ ]·보통 [ ]·최대 [ ] / 넣으면 밀리는 것: [ ] / 제안: [축소·연기·거절 중 하나]" },
@@ -167,7 +167,7 @@
   /* ---------- 상태 ---------- */
   var S = {
     raw: {}, settings: {}, llm: { enabled: false, model: "" }, version: "", auth: false, loaded: false, ready: false,
-    drafts: {}, openReq: null, openProg: null, openRisk: null, reqFilter: "open", noteFilter: "week", showClosedBlk: false, showDoneMap: false,
+    drafts: {}, openReq: null, reasonFor: null, openProg: null, openRisk: null, reqFilter: "open", noteFilter: "week", showClosedBlk: false, showDoneMap: false,
     blkKind: "b", boundsEdit: null, friInit: false, friDirty: false, friUndo: null, friCtl: null, askPolished: {}, imp: null, guideSlug: null,
     seeding: false, pointer: 0, pending: false, aiOff: false, fRecvTouched: false, ask: { on: false, urls: [] }
   };
@@ -479,7 +479,7 @@
     var cal = calNow(), wk = weekRange(now);
     var open = S.requests.filter(function (r) { return safe("isOpenReq", function () { return K.isOpenReq(r); }, CLOSED.indexOf(r.status) < 0); });
     var over = open.filter(function (r) { var c = safe("reqClock", function () { return K.reqClock(r, now, cal); }, null); return c && c.state === "over"; }).length;
-    var waiting = S.requests.filter(function (r) { return r.status === "접수" || r.status === "정리 중"; }).length;
+    var waiting = S.requests.filter(function (r) { return (r.status === "접수" || r.status === "정리 중") && !r.withdrawnAt; }).length;
     var absorbed = safe("absorbedThisWeek", function () { return K.absorbedThisWeek(S.requests, now); }, S.requests.filter(function (r) { return r.absorbed && inRange(r.absorbedAt || r.receivedAt, wk); }).length);
     var active = S.programs.filter(function (p) { return p.active; }).length;
     return { open: open, over: over, waiting: waiting, absorbed: absorbed, active: active };
@@ -557,7 +557,11 @@
       if (!a) return;
       var lv = LV[a.level] || LV.info, link = a.tab ? tabLink(String(a.tab)) : null;
       if (link && a.ref && a.ref.id) link.addEventListener("click", function () {
-        if (a.ref.coll === "requests") { S.openReq = a.ref.id; S.reqFilter = "open"; }
+        if (a.ref.coll === "requests") {
+          S.openReq = a.ref.id; S.reqFilter = "open";
+          var rq = byId(S.requests, a.ref.id), nw = rq ? newsOf(rq) : null;
+          if (nw && nw.unseen) { quiet(upd("requests", a.ref.id, { seenAt: new Date().toISOString() })); return; }
+        }
         render();
       });
       ul.append(h("li", null, pill(lv[0], lv[1]), h("span", { cls: "grow", text: String(a.text || "") }), link));
@@ -722,20 +726,64 @@
   /* 접수함 정렬: 열린 것은 시계 넘김 → 오늘 기한 → 여유 → 시계 없음 순, 같으면 최근 접수부터 */
   var CLK_RANK = { over: 0, soon: 1, ok: 2 };
   function clkRank(r, now) {
-    if (!isOpenR(r)) return 4;
+    var n = newsOf(r);
+    if (n && n.level === "crit") return -1;
+    if (!isOpenR(r)) return attention(r) ? -1 : 4;
     var c = safe("reqClock", function () { return K.reqClock(r, now, calNow()); }, null);
     return c && has(CLK_RANK, c.state) ? CLK_RANK[c.state] : 3;
   }
   function missingOf(r) { return safe("missing", function () { return K.missing(r); }, []); }
   function isOpenR(r) { return safe("isOpenReq", function () { return K.isOpenReq(r); }, CLOSED.indexOf(r.status) < 0); }
+  /* 요청자 소식(창구에서 빈칸 채움·덧붙임·취소·끝남 확인)과 다시 볼 것 */
+  function newsOf(r) { return safe("askNews", function () { return K.askNews(r); }, null); }
+  function attention(r) { return safe("reqAttention", function () { return K.reqAttention(r); }, false); }
+  function statusPatchOf(cur, v, now) {
+    return safe("statusPatch", function () { return K.statusPatch(cur, v, now); }, null) || (function () {
+      var p = { status: v, statusAt: now };
+      if (v === "리드 전달" && !cur.forwardedAt) p.forwardedAt = now;
+      if (CLOSED.indexOf(v) >= 0 && !cur.closedAt) p.closedAt = now;
+      if (CLOSED.indexOf(v) < 0 && cur.closedAt) p.closedAt = null;
+      if (v === "보류" && cur.status !== "보류") p.heldAt = now;
+      if (v !== "보류" && cur.heldAt) p.heldAt = null;
+      return p;
+    })();
+  }
+  function hasLink(r) { return /^[23456789abcdefghjkmnpqrstuvwxyz]{10}$/.test(String(r && r.askCode || "")); }
   function setReqStatus(r, v) {
-    var cur = byId(S.requests, r.id) || r, now = new Date().toISOString(), p = { status: v };
-    if (v === "리드 전달" && !cur.forwardedAt) p.forwardedAt = now;
-    if (CLOSED.indexOf(v) >= 0 && !cur.closedAt) p.closedAt = now;
-    if (CLOSED.indexOf(v) < 0 && cur.closedAt) p.closedAt = null;
-    if (v === "보류" && cur.status !== "보류") p.heldAt = now;
-    if (v !== "보류" && cur.heldAt) p.heldAt = null;
+    var cur = byId(S.requests, r.id) || r, now = new Date().toISOString();
+    if (v === (cur.status || "접수")) { if (S.reasonFor && S.reasonFor.id === r.id) { S.reasonFor = null; render(); } return; }
+    /* 요청자 링크가 있는 요청을 보류·종료로 바꿀 때는 요청자에게 보일 이유를 하나 골라야 저장됩니다. */
+    if ((v === "보류" || v === "종료") && hasLink(cur)) { S.reasonFor = { id: r.id, status: v, pick: "", extra: "" }; render(); return; }
+    S.reasonFor = null;
+    var p = statusPatchOf(cur, v, now);
     quiet(upd("requests", r.id, p).then(function () { var hint = t(["intake", "status_hints", v], ""); if (p.forwardedAt) toast("리드에게 넘긴 것으로 적었습니다. 전달 시계가 멈춥니다."); else if (hint) toast(v + ": " + hint); }));
+  }
+  function reasonEditor(r) {
+    var cur = byId(S.requests, r.id) || r, next = S.reasonFor.status;
+    var list = (next === "보류" ? K.HOLD_REASONS : K.CLOSE_REASONS) || [];
+    if (cur.withdrawnAt && K.CANCEL_REASON) list = [K.CANCEL_REASON].concat(list);
+    /* 리드가 맡은 뒤라면 '빈칸 답'을 까닭으로 고를 일이 없습니다. */
+    if (K.leadHas && K.leadHas(cur)) list = list.filter(function (x) { return x !== K.HOLD_REASONS[0] && x !== K.CLOSE_REASONS[2]; });
+    /* 고른 이유·덧붙일 말은 S.reasonFor에 두어, 다시 그려도 사라지지 않게 합니다. */
+    var pick = h("select", { "aria-label": "이유", "data-keep": "rr:" + r.id });
+    fillSelect(pick, list.map(function (x) { return [x, x]; }), S.reasonFor.pick || list[0]);
+    pick.addEventListener("change", function () { S.reasonFor.pick = pick.value; });
+    var extra = h("input", { type: "text", maxlength: "300", autocomplete: "off", "aria-label": "덧붙일 말", "data-keep": "re:" + r.id, placeholder: next === "보류" ? "덧붙일 말(선택). 예: 12/8 사이클 시작 때 다시 봅니다" : "덧붙일 말(선택)" });
+    extra.value = S.reasonFor.extra || "";
+    extra.addEventListener("input", function () { S.reasonFor.extra = extra.value; });
+    return h("div", { cls: "req-reason stack" },
+      h("p", { cls: "label", text: "요청자에게 보일 이유(링크를 받은 누구나 봅니다)" }), pick, extra,
+      h("div", { cls: "row" },
+        wbtn(next + "(으)로 바꾸고 알림 문장 복사", function () {
+          var now = new Date().toISOString(), reply = clean([pick.value, extra.value.trim()].filter(Boolean).join(" "));
+          var p = Object.assign(statusPatchOf(cur, next, now), { reply: reply, replyAt: now });
+          var base = doorBase(), link = base ? K.askLink(base, cur.askCode) : "";
+          copyText(K.replyText(Object.assign({}, cur, p), link), null, "알림 문장을 복사했습니다. 요청자 화면에도 이유가 보입니다.");
+          S.reasonFor = null;
+          quiet(upd("requests", r.id, p));
+        }, "primary"),
+        h("button", { cls: "btn sm quiet", type: "button", onclick: function () { S.reasonFor = null; render(); } }, "그만두기")),
+      next === "종료" ? h("p", { cls: "ex", text: "거절은 팀장과 정한 뒤에만 알립니다." }) : null);
   }
   function reqField(r, k) { return function (v) { var p = {}; p[k] = typeof v === "string" ? clean(v) : v; return upd("requests", r.id, p); }; }
   function statusOpts() { var s = t("intake.statuses", STATUSES); return (s.length === 7 ? s : STATUSES).map(function (x) { return [x, x]; }); }
@@ -766,23 +814,34 @@
       tile(sz.L, t("intake.tiles.L", "L 사이클급"), sz.L ? "warn" : ""), tile(urg, t("intake.tiles.urgent", "긴급(사후 등록)"), urg ? "warn" : ""));
     ["open", "all", "done"].forEach(function (f) { $("rf-" + f).setAttribute("aria-pressed", S.reqFilter === f ? "true" : "false"); });
     thead("req-head", cols("intake.columns", ["요청", "요청자", "프로그램", "크기", "상태", "접수일", "전달 시계", "빈칸", "동작"], 9).slice(0, 8), true);
-    var list = S.requests.filter(function (r) { return S.reqFilter === "all" ? true : S.reqFilter === "done" ? !isOpenR(r) : isOpenR(r); })
+    var keepId = S.openReq || (S.reasonFor && S.reasonFor.id);
+    var list = S.requests.filter(function (r) { return r.id === keepId || (S.reqFilter === "all" ? true : S.reqFilter === "done" ? !isOpenR(r) : isOpenR(r) || attention(r)); })
       .sort(function (a, b) { return clkRank(a, now) - clkRank(b, now) || String(b.receivedAt || "").localeCompare(String(a.receivedAt || "")); });
     var body = $("req-body"); body.replaceChildren();
     list.forEach(function (r) {
-      var miss = missingOf(r), open = S.openReq === r.id;
+      var miss = missingOf(r), open = S.openReq === r.id, news = newsOf(r), es = safe("etaState", function () { return K.etaState(r, now, calNow()); }, "");
+      var st0 = r.status || "접수", early = st0 === "접수" || st0 === "정리 중";
       var what = h("td", null, h("div", { cls: "what", text: r.what || "(무엇 칸 비어 있음)" }),
         h("div", { cls: "pills" }, r.urgent ? pill("on", "긴급") : null, r.via === "창구" ? pill("on", "창구") : null, r.absorbed ? pill("warn", "흡수") : null,
-          r.addedAt && (!r.askedAt || r.addedAt > r.askedAt) ? pill("good", "요청자가 보탬 " + fmtDay(r.addedAt)) : r.askedAt ? pill("info", "되물음 " + fmtDay(r.askedAt)) : null),
+          news ? pill(news.level === "crit" ? "crit" : news.level === "good" ? "good" : "info", news.text) : r.askedAt && early && isOpenR(r) ? pill("info", "되물음 " + fmtDay(r.askedAt)) : null,
+          es === "past" ? pill("warn", "알린 날짜 지남") : es === "soon" ? pill("info", "알린 날짜 내일") : null,
+          news && news.kind === "doneok" ? wbtn("완료로", function () { S.reasonFor = null; quiet(upd("requests", r.id, statusPatchOf(r, "완료", new Date().toISOString()))); }, "primary") : null,
+          news && news.kind === "cancel" && news.level === "crit" ? wbtn("리드에게 알렸으면 종료로", function () { var n0 = new Date().toISOString(); S.reasonFor = null; quiet(upd("requests", r.id, Object.assign(statusPatchOf(r, "종료", n0), { reply: K.CANCEL_REASON, replyAt: n0, seenAt: n0 }))); }) : null),
+        safe("replyNow", function () { return K.replyNow(r); }, "") && (st0 === "보류" || st0 === "종료") ? h("div", { cls: "ex", text: "이유: " + K.replyNow(r) }) : null,
         r.raw && r.raw !== r.what ? h("div", { cls: "raw", text: r.raw }) : null);
       body.append(h("tr", { cls: open ? "open" : (isOpenR(r) ? "" : "dim") }, what,
         h("td", { cls: "mid", text: r.from || "—" }), h("td", { cls: "mid", text: progName(r.program) }),
         h("td", null, r.size ? pill(String(r.size).toLowerCase(), r.size) : "—"),
-        h("td", null, sel("rs:" + r.id, statusOpts(), r.status || "접수", function (v) { setReqStatus(r, v); }, { "aria-label": "상태", cls: "st", title: t(["intake", "status_hints", r.status || "접수"], ""), "data-w": true, disabled: !S.ready })),
+        h("td", null, sel("rs:" + r.id, statusOpts(), S.reasonFor && S.reasonFor.id === r.id ? S.reasonFor.status : r.status || "접수", function (v) { setReqStatus(r, v); }, { "aria-label": "상태", cls: "st", title: t(["intake", "status_hints", r.status || "접수"], ""), "data-w": true, disabled: !S.ready })),
         h("td", { cls: "nw tnum", text: fmtDT(r.receivedAt) }),
         h("td", null, reqClockPill(r, now)),
         h("td", null, miss.length ? h("div", { cls: "pills" }, miss.map(function (m) { return pill("warn", m); })) : pill("good", t("intake.missing_none_ko", "빈칸 없음"))),
-        h("td", null, h("button", { cls: "btn sm", type: "button", "aria-expanded": open ? "true" : "false", onclick: function () { S.openReq = open ? null : r.id; render(); } }, open ? IB("close_edit", "편집 닫기") : "편집"))));
+        h("td", null, h("button", { cls: "btn sm", type: "button", "aria-expanded": open ? "true" : "false", onclick: function () {
+          S.openReq = open ? null : r.id;
+          /* 연 것으로 요청자 소식을 본 것으로 칩니다(넘긴 뒤 취소처럼 꼭 처리할 것은 닫을 때까지 남음). */
+          if (!open && news && news.unseen) quiet(upd("requests", r.id, { seenAt: new Date().toISOString() })); else render();
+        } }, open ? IB("close_edit", "편집 닫기") : "편집"))));
+      if (S.reasonFor && S.reasonFor.id === r.id) body.append(h("tr", { cls: "edit" }, h("td", { colspan: "9" }, reasonEditor(r))));
       if (open) body.append(h("tr", { cls: "edit" }, h("td", { colspan: "9" }, reqEditor(r, miss))));
     });
     if (!list.length) body.append(h("tr", null, h("td", { colspan: "9", cls: "empty", text: S.requests.length ? t("intake.empty_filter_ko", "이 보기에는 요청이 없습니다.") : t("intake.empty_ko", D.intakeEmpty) })));
@@ -804,7 +863,7 @@
     }
     function lab(cls, key, dl, el) { return h("label", { cls: cls }, h("span", { text: FL(key, dl) }), el); }
     var left = h("div", { cls: "form" },
-      lab("wide", "raw", "원문", txt(k("raw"), r.raw, reqField(r, "raw"), { rows: "2", placeholder: FP("raw") }, "textarea")),
+      h("label", { cls: "wide" }, h("span", { text: FL("raw", "원문") + (r.via === "창구" ? "(요청자가 적은 것)" : "(요청자에게 보이지 않음)") }), txt(k("raw"), r.raw, reqField(r, "raw"), { rows: "2", placeholder: FP("raw") }, "textarea")),
       lab(null, "what", "무엇", txt(k("what"), r.what, reqField(r, "what"), { placeholder: FP("what") })),
       lab(null, "from", "요청자(역할)", sel(k("from"), roles().map(function (x) { return [x, x]; }), r.from, function (v) { quiet(upd("requests", id, { from: v })); })),
       lab(null, "program", "어느 프로그램", sel(k("prog"), progOptions(), r.program || "", function (v) { quiet(upd("requests", id, { program: v })); })),
@@ -812,7 +871,7 @@
       lab(null, "why", "왜·누가 결정", txt(k("why"), r.why, reqField(r, "why"), { placeholder: FP("why") })),
       lab(null, "when", "언제까지와 이유", txt(k("when"), r.when, reqField(r, "when"), { placeholder: FP("when") })),
       lab(null, "check", "확인 방법", txt(k("check"), r.check, reqField(r, "check"), { placeholder: FP("check") })),
-      h("label", null, h("span", { text: "받은 때" }), txt(k("recv"), r.receivedAt ? nowLocalInput(r.receivedAt) : "", function (v) { var iso = fromLocalInput(v); return iso ? upd("requests", id, { receivedAt: iso }) : Promise.resolve(); }, { type: "datetime-local" })),
+      h("label", null, h("span", { text: r.via === "창구" ? "받은 때(창구가 적음)" : "받은 때" }), txt(k("recv"), r.receivedAt ? nowLocalInput(r.receivedAt) : "", function (v) { var iso = fromLocalInput(v); return iso ? upd("requests", id, { receivedAt: iso }) : Promise.resolve(); }, { type: "datetime-local", disabled: r.via === "창구" })),
       h("label", { cls: "check" }, chk(k("urgent"), r.urgent, function (v) { quiet(upd("requests", id, { urgent: v })); }), h("span", { text: t("intake.urgent_label_ko", "긴급(리드가 바로 처리하고, 여기에는 사후 등록)") })),
       h("label", { cls: "wide" }, h("span", { text: FL("est", "리드 추정(근무일)") + " — 최소 · 보통 · 최대" }), h("div", { cls: "est" },
         txt(k("emin"), est.min, estSave("min"), { placeholder: t("intake.fields.est.min", "최소"), "aria-label": "최소" }),
@@ -836,20 +895,56 @@
       h("div", { cls: "row" },
         h("button", { cls: "btn sm primary", type: "button", disabled: !miss.length || !S.ready, onclick: function () {
           copyText(askT, askBox, t("intake.ask_done_ko", "되묻기 문장을 복사했습니다."));
-          var cur = byId(S.requests, id) || r, p = { askedAt: new Date().toISOString() };
-          if ((cur.status || "접수") === "접수") p.status = "정리 중";
+          var cur = byId(S.requests, id) || r, now0 = new Date().toISOString(), p = { askedAt: now0 };
+          if ((cur.status || "접수") === "접수") Object.assign(p, statusPatchOf(cur, "정리 중", now0));
           quiet(upd("requests", id, p));
         } }, IB("ask", "되묻기 문장 복사")), aiBtn, aiSt),
       h("p", { cls: "label", text: "리드에게 넘길 문장(결정된 것 / 열린 것 / 요청자)" }), handBox,
       h("div", { cls: "row" }, h("button", { cls: "btn sm", type: "button", onclick: function () { copyText(handT, handBox, t("intake.handoff_done_ko", "넘길 문장을 복사했습니다.")); } }, IB("handoff", "리드에게 넘길 문장 복사"))),
+      reqOutward(r),
       h("div", { cls: "row" },
         wbtn(r.absorbed ? IB("unabsorb", "흡수 표시 취소") : IB("absorb", "흡수 표시"), function () {
           var cur = byId(S.requests, id) || r, on = !cur.absorbed;
           quiet(upd("requests", id, { absorbed: on, absorbedAt: on ? new Date().toISOString() : null }).then(function () { toast(on ? t("intake.absorb_hint_ko", "흡수 건수에 더했습니다.") : "흡수 표시를 지웠습니다."); }));
         }),
-        twoBtn(IB("delete", "삭제"), function () { S.openReq = null; quiet(del("requests", id).then(function () { toast("요청을 지웠습니다."); })); }, "danger")),
+        twoBtn(hasLink(r) ? IB("delete", "삭제") + "(요청자 링크도 사라짐)" : IB("delete", "삭제"), function () { S.openReq = null; quiet(del("requests", id).then(function () { toast("요청을 지웠습니다."); })); }, "danger")),
       h("p", { cls: "ex tnum", text: [r.askedAt ? "되물음 " + fmtDT(r.askedAt) : "", r.forwardedAt ? "넘김 " + fmtDT(r.forwardedAt) : "", r.heldAt ? "보류 " + fmtDT(r.heldAt) : "", r.closedAt ? "닫음 " + fmtDT(r.closedAt) : "", r.absorbedAt ? "흡수 " + fmtDT(r.absorbedAt) : ""].filter(Boolean).join(" · ") }));
     return h("div", { cls: "edit-grid" }, left, right);
+  }
+  /* 요청자 화면에 보이는 것: 남길 말·알린 날짜·덧붙임. 메모·크기·리드 추정은 보이지 않습니다. */
+  function reqOutward(r) {
+    var id = r.id, k = function (f) { return "rq:" + id + ":" + f; }, base = doorBase(), link = base && hasLink(r) ? K.askLink(base, r.askCode) : "";
+    var etaV = /^\d{4}-\d{2}-\d{2}$/.test(String(r.eta || "")) ? r.eta : "";
+    var far = "";
+    if (etaV) { var nW = safe("workdaysBetween", function () { return calNow().workdaysBetween(new Date(), K.parseYmd(etaV)); }, 0); if (nW > 10) far = "근무일 10일(2주)을 넘는 날짜는 팀장 결재 뒤에 알립니다."; }
+    var adds = safe("reqAdds", function () { return K.reqAdds(r); }, []), relay = r.forwardedAt ? safe("addsText", function () { return K.addsText(r, r.forwardedAt); }, "") : "";
+    return h("div", { cls: "req-out stack" },
+      h("p", { cls: "label", text: "요청자 화면에 보이는 것" }),
+      h("p", { cls: "ex", text: hasLink(r) ? "요청자 링크에는 무엇·요청자·왜·언제까지·확인 방법·프로그램" + (r.via === "창구" ? "·원문" : "") + "과 아래 두 칸이 보입니다. 크기·리드 추정·메모·흡수는 보이지 않습니다." : base ? "아직 요청자 링크가 없습니다. [요청자 링크 만들기]를 누르면 링크가 생기고, 진행 링크 문장이 복사됩니다. 그 뒤 아래 두 칸이 요청자에게 보입니다." : "요청 창구가 닫혀 있어 요청자 링크가 없습니다. 아래 두 칸은 창구를 열고 링크를 만든 뒤에 요청자에게 보입니다." }),
+      !hasLink(r) && base ? h("div", { cls: "row" }, wbtn("요청자 링크 만들기", function () {
+        var b = new Uint8Array(10);
+        try { window.crypto.getRandomValues(b); } catch (e) { for (var i = 0; i < 10; i++) b[i] = Math.floor(Math.random() * 256); }
+        var code = K.askCodeFrom(b), l = K.askLink(base, code);
+        copyText(K.statusLinkText(r, l), null, "링크를 만들고 진행 링크 문장을 복사했습니다.");
+        quiet(upd("requests", id, { askCode: code }));
+      })) : null,
+      h("label", null, h("span", { text: "요청자에게 남길 말(링크를 받은 누구나 봅니다)" }),
+        txt(k("reply"), r.reply, function (v) { var x = clean(v); return upd("requests", id, x ? { reply: x, replyAt: new Date().toISOString() } : { reply: null, replyAt: null }); }, { rows: "2", maxlength: "500", placeholder: "예: 담당 리드가 맡았습니다. 다음 주에 시험판을 보여 드립니다." }, "textarea")),
+      r.reply && !safe("replyNow", function () { return K.replyNow(r); }, r.reply) ? h("p", { cls: "ex", text: "이 말은 지금 단계 전에 남긴 것이라 요청자 화면에는 보이지 않습니다. 고쳐 적으면 다시 보입니다." }) : null,
+      h("div", { cls: "row" },
+        h("label", null, h("span", { text: "알린 날짜(담당 리드가 가늠한 최대값)" }),
+          txt(k("eta"), etaV, function (v) { return upd("requests", id, v ? { eta: v, etaAt: new Date().toISOString() } : { eta: null, etaAt: null }); }, { type: "date" })),
+        h("button", { cls: "btn sm", type: "button", onclick: function () {
+          var cur = byId(S.requests, id) || r;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(cur.eta || ""))) { toast("먼저 날짜를 고르세요."); return; }
+          copyText(K.etaText(cur, link), null, "날짜 알림 문장을 복사했습니다.");
+        } }, "날짜 알림 문장 복사"),
+        far ? h("span", { cls: "ex", text: far }) : null),
+      adds.length ? h("div", { cls: "stack" }, h("p", { cls: "label", text: "요청자가 덧붙인 말" }),
+        h("ul", { cls: "req-adds" }, adds.map(function (a) { return h("li", null, h("span", { cls: "ex tnum", text: fmtDT(a.at) + (a.kind === "cancel" ? " · 취소하며" : a.kind === "notyet" ? " · 아직 다름" : "") }), " ", a.text); })),
+        relay ? h("div", { cls: "row" }, h("button", { cls: "btn sm", type: "button", onclick: function () { copyText(relay, null, "리드에게 전할 문장을 복사했습니다."); } }, "넘긴 뒤 덧붙임을 리드에게 전할 문장 복사")) : null) : null,
+      link ? h("div", { cls: "row" }, h("span", { cls: "mono", text: link }), h("a", { cls: "btn sm", href: link, target: "_blank", rel: "noopener" }, "요청자 화면으로 보기"),
+        h("button", { cls: "btn sm", type: "button", onclick: function () { copyText(K.statusLinkText(r, link), null, "진행 링크 문장을 복사했습니다."); } }, "진행 링크 문장 복사")) : null);
   }
   ["open", "all", "done"].forEach(function (f) { $("rf-" + f).addEventListener("click", function () { S.reqFilter = f; render(); }); });
   $("f-recv").addEventListener("input", function () { S.fRecvTouched = true; });
@@ -1523,8 +1618,12 @@
     setInterval(function () {
       var d = K.ymd(new Date());
       if (d !== lastDay) { lastDay = d; $("d-date").value = d; $("tl-date").value = d; render(); } else tickClocks();
+      /* 창구가 열려 있으면 요청자가 보낸 것·남긴 것을 30초마다 새로 읽습니다(무언가 적거나 고치는 중이면 건드리지 않음). */
+      var ae = document.activeElement;
+      /* 접수함 탭을 보고 있을 때만(다른 탭의 적던 글·펼친 기록을 건드리지 않게). */
+      if (S.ask.on && S.loaded && !document.hidden && !$("p-intake").hidden && !S.openReq && !S.reasonFor && !(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))) refresh();
     }, 30000);
-    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible" && S.loaded) refresh(); });
+    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible" && S.loaded && !S.reasonFor) refresh(); });
   }
   boot();
 })();
