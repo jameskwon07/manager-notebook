@@ -24,7 +24,7 @@ function Wait-Health([int]$port) {
     try { $r = Invoke-RestMethod "http://127.0.0.1:$port/api/health" -TimeoutSec 2; if ($r.ok) { return $r } } catch {}
     Start-Sleep -Milliseconds 500
   }
-  throw "port $port: health did not answer"
+  throw "port ${port} - health did not answer"
 }
 function Stop-Nb($p) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force; $p.WaitForExit(10000) | Out-Null } }
 function Post-Json([string]$url, $obj) {
